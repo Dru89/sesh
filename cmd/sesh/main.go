@@ -1406,6 +1406,13 @@ func aiFilterSessions(ctx context.Context, command []string, query string, sessi
 
 // runUpdate checks for and installs the latest version.
 func runUpdate() {
+	// Detect Homebrew installation.
+	execPath, _ := os.Executable()
+	if execPath != "" && strings.Contains(execPath, "/Cellar/") || strings.Contains(execPath, "/homebrew/") {
+		fmt.Fprintf(os.Stderr, "sesh was installed via Homebrew. Use 'brew upgrade sesh' instead.\n")
+		os.Exit(0)
+	}
+
 	fmt.Fprintf(os.Stderr, "Current version: %s\n", version)
 	fmt.Fprintf(os.Stderr, "Checking for updates...\n")
 
