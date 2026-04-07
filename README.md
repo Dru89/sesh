@@ -300,3 +300,7 @@ sesh ask --agent opencode "What refactoring have I done recently?"
 ```
 
 Uses a two-pass approach: first filters sessions to the relevant subset (fast model), then generates a prose answer from just those sessions (heavy model). Output goes to stdout.
+
+## Raycast Extension
+
+A Raycast extension is included in the `raycast/` directory. It provides the same session browsing experience from Raycast's launcher, with configurable terminal support (Terminal.app, iTerm2, Ghostty, Warp, or custom). See [raycast/README.md](raycast/README.md) for setup instructions.

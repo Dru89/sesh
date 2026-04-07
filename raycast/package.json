@@ -1,0 +1,65 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "sesh",
+  "title": "sesh",
+  "description": "Browse and resume coding agent sessions across OpenCode, Claude Code, and more",
+  "icon": "extension-icon.png",
+  "author": "dru89",
+  "categories": ["Developer Tools"],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "search-sessions",
+      "title": "Search Sessions",
+      "subtitle": "sesh",
+      "description": "Search and resume coding agent sessions",
+      "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "seshPath",
+      "title": "sesh Binary Path",
+      "description": "Path to the sesh binary. Leave empty to use the default from PATH.",
+      "type": "textfield",
+      "required": false,
+      "default": "sesh"
+    },
+    {
+      "name": "terminal",
+      "title": "Terminal Application",
+      "description": "Which terminal to use when resuming a session",
+      "type": "dropdown",
+      "required": false,
+      "default": "terminal",
+      "data": [
+        { "title": "Terminal.app", "value": "terminal" },
+        { "title": "iTerm2", "value": "iterm" },
+        { "title": "Ghostty", "value": "ghostty" },
+        { "title": "Warp", "value": "warp" },
+        { "title": "Custom", "value": "custom" }
+      ]
+    },
+    {
+      "name": "customTerminalCommand",
+      "title": "Custom Terminal Command",
+      "description": "AppleScript or shell command to open a terminal and run a command. Use {cmd} as placeholder for the resume command. Only used when Terminal is set to Custom.",
+      "type": "textfield",
+      "required": false,
+      "default": ""
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.102.0",
+    "@raycast/utils": "^1.19.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.11",
+    "typescript": "^5.8.0"
+  },
+  "scripts": {
+    "build": "ray build",
+    "dev": "ray develop",
+    "lint": "ray lint"
+  }
+}
