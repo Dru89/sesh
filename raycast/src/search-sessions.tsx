@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Action, ActionPanel, Icon, List } from "@raycast/api";
+import { Action, ActionPanel, Icon, List, showToast, Toast } from "@raycast/api";
 import { useCachedPromise } from "@raycast/utils";
 import { loadSessions, aiSearchSessions } from "./sesh";
 import {
@@ -26,14 +26,13 @@ export default function SearchSessions() {
   const displaySessions = aiResults ?? sessions ?? [];
   const isAiMode = aiResults !== null;
 
-  function handleAiSearch() {
+  async function handleAiSearch() {
     if (!searchText.trim()) return;
     setAiLoading(true);
-    setTimeout(() => {
-      const results = aiSearchSessions(searchText);
-      setAiResults(results ?? []);
-      setAiLoading(false);
-    }, 0);
+
+    const results = await aiSearchSessions(searchText);
+    setAiResults(results);
+    setAiLoading(false);
   }
 
   function handleSearchChange(text: string) {

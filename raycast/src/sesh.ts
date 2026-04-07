@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { exec, execSync } from "child_process";
 import { getPreferenceValues, showToast, Toast } from "@raycast/api";
 import { SeshSession } from "./types";
 
@@ -41,24 +41,60 @@ export function loadSessions(): SeshSession[] {
   }
 }
 
-export function aiSearchSessions(query: string): SeshSession[] {
+// aiSearchSessions is async so the loading indicator actually renders.
+// execSync would block the event loop and prevent Raycast from updating the UI.
+export async function aiSearchSessions(query: string): Promise<SeshSession[]> {
   const sesh = getSeshPath();
-  try {
-    const output = execSync(`${sesh} --json --ai-search ${shellQuote(query)}`, {
-      timeout: 30000,
-      encoding: "utf-8",
-      shell: "/bin/bash",
-      env: seshEnv(),
-    });
-    return JSON.parse(output);
-  } catch (err) {
-    showToast({
-      style: Toast.Style.Failure,
-      title: "AI search failed",
-      message: err instanceof Error ? err.message : String(err),
-    });
-    return [];
-  }
+
+  await showToast({
+    style: Toast.Style.Animated,
+    title: "Searching with AI...",
+  });
+
+  return new Promise((resolve) => {
+    exec(
+      `${sesh} --json --ai-search ${shellQuote(query)}`,
+      {
+        timeout: 30000,
+        encoding: "utf-8",
+        shell: "/bin/bash",
+        env: seshEnv(),
+      },
+      (err, stdout, stderr) => {
+        if (err) {
+          const msg = stderr?.trim() || err.message;
+          showToast({
+            style: Toast.Style.Failure,
+            title: "AI search failed",
+            message: msg,
+          });
+          resolve([]);
+          return;
+        }
+        try {
+          const results: SeshSession[] = JSON.parse(stdout) ?? [];
+          if (results.length === 0) {
+            showToast({
+              style: Toast.Style.Failure,
+              title: "No relevant sessions found",
+            });
+          } else {
+            showToast({
+              style: Toast.Style.Success,
+              title: `Found ${results.length} session${results.length === 1 ? "" : "s"}`,
+            });
+          }
+          resolve(results);
+        } catch {
+          showToast({
+            style: Toast.Style.Failure,
+            title: "Failed to parse AI search results",
+          });
+          resolve([]);
+        }
+      }
+    );
+  });
 }
 
 export function relativeTime(isoDate: string): string {

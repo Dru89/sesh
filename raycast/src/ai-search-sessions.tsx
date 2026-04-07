@@ -16,28 +16,35 @@ export default function AiSearchSessions() {
   const [isLoading, setIsLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortRef = useRef(false);
 
   useEffect(() => {
-    // Debounce: wait 600ms after the user stops typing.
     if (timerRef.current) {
       clearTimeout(timerRef.current);
     }
+    // Abort any in-flight search.
+    abortRef.current = true;
 
     if (searchText.trim().length < 3) {
       setResults([]);
       setHasSearched(false);
+      setIsLoading(false);
       return;
     }
 
-    timerRef.current = setTimeout(() => {
+    // Debounce: wait 600ms after the user stops typing.
+    timerRef.current = setTimeout(async () => {
+      abortRef.current = false;
       setIsLoading(true);
       setHasSearched(true);
-      // Run in next tick to allow loading state to render.
-      setTimeout(() => {
-        const sessions = aiSearchSessions(searchText);
-        setResults(sessions ?? []);
+
+      const sessions = await aiSearchSessions(searchText);
+
+      // Don't update if the search was superseded by a newer one.
+      if (!abortRef.current) {
+        setResults(sessions);
         setIsLoading(false);
-      }, 0);
+      }
     }, 600);
 
     return () => {
