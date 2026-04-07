@@ -99,7 +99,6 @@ export async function aiSearchSessions(query: string): Promise<SeshSession[]> {
           });
           resolve([]);
         }
-        }
       }
     );
   });
