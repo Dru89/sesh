@@ -38,6 +38,8 @@ sesh --agent opencode   # only show OpenCode sessions
 sesh --json             # dump all sessions as JSON (for Raycast, scripts, etc.)
 sesh index              # generate summaries for all sessions
 sesh index --agent omp  # generate summaries for one agent only
+sesh recap --days 7     # summarize what you worked on this week
+sesh ask "What did I work on around login with claude code?"
 ```
 
 In the picker: type to filter, arrow keys to navigate, enter to select, esc to cancel.
@@ -156,34 +158,79 @@ Rules:
 
 This is the integration point for Raycast extensions or other tools that want to present session data in their own UI.
 
-## Summaries
+## LLM configuration
 
-sesh can generate one-line summaries for each session using any LLM you have access to. Summaries replace ugly or auto-generated titles in the picker and are included in the fuzzy search corpus.
+sesh uses LLMs for title generation, session search, recaps, and natural language queries. Each subcommand can use a different model — fast/cheap for high-volume tasks, heavier for prose generation.
 
-### Setup
+### Minimal setup
 
-Add a `summary` section to your config. The `command` is any executable that reads session text from stdin and writes a summary to stdout:
+Configure one command and everything uses it:
 
 ```json
 {
-  "summary": {
+  "index": {
     "command": ["llm", "-m", "haiku"]
   }
 }
 ```
 
-The command receives a prompt followed by the session's user messages on stdin. It should output a single line. Any command works: `llm`, `claude -p`, a script that calls a local model, etc.
+The command receives input on stdin and writes output to stdout. Any executable works: `llm`, `claude -p`, a script that calls a local model, etc.
 
-To override the default prompt:
+### Split fast and heavy models
+
+Use a fast model for title generation and filtering, a heavier model for prose:
 
 ```json
 {
-  "summary": {
-    "command": ["llm", "-m", "haiku"],
-    "prompt": "Describe this coding session in one sentence, under 15 words."
+  "index": {
+    "command": ["llm", "-m", "haiku"]
+  },
+  "ask": {
+    "command": ["llm", "-m", "sonnet"]
+  },
+  "recap": {
+    "command": ["llm", "-m", "sonnet"]
   }
 }
 ```
+
+### Full configuration
+
+```json
+{
+  "index": {
+    "command": ["llm", "-m", "haiku"],
+    "prompt": "Summarize this coding session in one sentence, under 20 words."
+  },
+  "ask": {
+    "command": ["llm", "-m", "sonnet"],
+    "prompt": "custom prompt for answer generation",
+    "filter_command": ["llm", "-m", "haiku"]
+  },
+  "recap": {
+    "command": ["llm", "-m", "sonnet"],
+    "prompt": "custom recap prompt"
+  },
+  "providers": { ... }
+}
+```
+
+### Fallback chains
+
+Each subcommand falls back through other configured commands so you only need to set up the ones you care about:
+
+| Task | Tries in order |
+|---|---|
+| `index` (title generation) | `index` -> `recap` -> `ask` -> `ask.filter_command` |
+| `ask` (prose answer) | `ask` -> `recap` -> `index` |
+| `ask` (session filtering) | `ask.filter_command` -> `index` -> `ask` -> `recap` |
+| `recap` (prose summary) | `recap` -> `ask` -> `index` |
+
+The pattern: heavy tasks prefer other heavy commands, light tasks prefer other light commands.
+
+## Summaries
+
+sesh can generate one-line summaries for each session. Summaries replace ugly or auto-generated titles in the picker and are included in the fuzzy search corpus.
 
 ### Generating summaries
 
@@ -202,3 +249,34 @@ Shows a progress line per session. Run this once to backfill, then sesh keeps up
 Summaries are cached at `~/.cache/sesh/summaries.json`. A cached summary is considered stale when the session's `last_used` timestamp changes and the summary is more than an hour old. This avoids re-summarizing active sessions on every run while keeping finished sessions up to date.
 
 If summary generation fails (expired credentials, command not found, timeout), sesh logs a warning and continues with the raw title. Nothing crashes.
+
+## Recap
+
+Generate a prose summary of what you worked on across all agents over a time period:
+
+```
+sesh recap --days 7           # last 7 days
+sesh recap --since monday     # since Monday
+sesh recap --since 2026-04-01 --until 2026-04-07
+sesh recap --agent opencode   # only OpenCode sessions
+```
+
+Output goes to stdout as plain text.
+
+## AI fallback search
+
+When the fuzzy picker returns no results and an LLM command is configured, sesh automatically triggers an AI-powered search. The LLM receives your query along with all session titles/summaries and returns the most relevant matches.
+
+The fallback activates after 3+ characters with no fuzzy matches. A "Searching with AI..." indicator appears while the LLM processes. Results are marked with "(AI)" in the match count. If the LLM call fails, the picker stays on the empty state.
+
+## Ask
+
+Ask a natural language question about your sessions:
+
+```
+sesh ask "What did I work on around login with claude code since last Monday?"
+sesh ask "Show me everything related to the API gateway"
+sesh ask --agent opencode "What refactoring have I done recently?"
+```
+
+Uses a two-pass approach: first filters sessions to the relevant subset (fast model), then generates a prose answer from just those sessions (heavy model). Output goes to stdout.

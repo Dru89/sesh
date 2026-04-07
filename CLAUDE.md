@@ -8,14 +8,17 @@
 
 ```
 sesh/
-├── cmd/sesh/main.go         # CLI entry point, flag parsing, config loading, provider wiring
+├── cmd/sesh/main.go         # CLI entry point, subcommands (index, recap), config, provider wiring
 ├── provider/
 │   ├── provider.go           # Session type, Provider interface, helpers (RelativeTime, ShellQuote)
 │   ├── opencode.go           # OpenCode adapter — reads SQLite at ~/.local/share/opencode/opencode.db
 │   ├── claude.go             # Claude Code adapter — reads ~/.claude/history.jsonl + project transcripts
 │   └── external.go           # External provider — shells out to user-defined command, parses JSON
+├── summary/
+│   ├── cache.go              # JSON file cache at ~/.cache/sesh/summaries.json
+│   └── generate.go           # LLM command execution, summary generation, RunLLM shared function
 ├── tui/
-│   └── tui.go                # Bubbletea fzf-style picker, renders to stderr, result to stdout
+│   └── tui.go                # Bubbletea fzf-style picker with AI fallback search
 ├── shell/
 │   ├── sesh.bash             # Bash wrapper function
 │   └── sesh.zsh              # Zsh wrapper function
@@ -45,12 +48,19 @@ The binary outputs a shell command string to stdout (`cd /path && agent --resume
 
 ### Config
 
-`~/.config/sesh/config.json` (optional). Providers listed in config under built-in names (`opencode`, `claude`) override resume commands or disable the provider. Any other name is treated as an external provider and requires `list_command`.
+`~/.config/sesh/config.json` (optional). Three categories of config:
 
-The `providerConfig` struct in `cmd/sesh/main.go` handles both cases:
-- `resume_command`: template string with `{{ID}}` and `{{DIR}}` placeholders
-- `enabled`: boolean, defaults to true
-- `list_command`: array of strings (external providers only)
+**Providers** (`providers`): Listed under built-in names (`opencode`, `claude`) to override resume commands or disable. Any other name is an external provider requiring `list_command`.
+
+**LLM commands** (`index`, `ask`, `recap`): Each subcommand has its own `command` and `prompt` fields. `ask` also has `filter_command` for the classification pass. Each subcommand falls back through the others via a priority chain so you only need to configure one.
+
+Fallback chains (flat, no recursion):
+- `index`: index -> recap -> ask -> ask.filter_command
+- `ask` (prose): ask -> recap -> index
+- `ask` (filter): ask.filter_command -> index -> ask -> recap
+- `recap`: recap -> ask -> index
+
+The `config` struct in main.go has methods `indexCommand()`, `askCommand()`, `askFilterCommand()`, `recapCommand()` that walk these chains via `resolveCommand()`. `summaryConfig()` builds a `summary.Config` from the resolved index command/prompt for the generator.
 
 ## Data sources
 
@@ -110,14 +120,39 @@ go build ./cmd/sesh/                    # build
 go build -o ~/go/bin/sesh ./cmd/sesh/   # build and install
 sesh --json                             # verify both providers return data
 sesh --json --agent opencode            # test single-agent filter
-sesh index                              # test summary generation (needs summary.command configured)
+sesh index                              # test title generation (needs index.command configured)
+sesh recap --days 7                     # test recap (needs recap or index command)
+sesh ask "what did I work on?"          # test ask (needs ask or index command)
 ```
+
+## AI fallback search
+
+When fuzzy search returns zero results in the TUI (with 3+ characters typed), the picker fires an async LLM call via `summary.RunLLM()`. Uses the resolved `askFilterCommand()` — prefers `ask.filter_command`, falls back through `index`, `ask`, `recap`.
+
+The fallback is wired through `tui.FallbackSearchFunc`, a callback passed via `tui.PickOptions`. It runs in a bubbletea `tea.Cmd` goroutine. Results arrive as a `fallbackResultMsg`. The TUI shows "Searching with AI..." while waiting. If the call fails, the picker stays on the empty state.
+
+`buildFallbackSearch()` in main.go takes a `[]string` command and constructs the closure.
+
+## Ask subcommand (two-pass)
+
+`sesh ask` uses two LLM calls:
+
+1. **Pass 1 (filter):** Sends the numbered session list + question to `askFilterCommand()`. Asks the LLM to return relevant session numbers. Classification task — fast model.
+2. **Pass 2 (generate):** Sends only the filtered sessions + question to `askCommand()`. Asks for a prose answer. Generation task — heavy model.
+
+This split keeps the heavy model's context small (5-20 sessions) regardless of total session count.
+
+## Recap subcommand
+
+`sesh recap` collects sessions in a time range, builds a formatted list with their summaries/titles, and sends it to `recapCommand()` with a recap prompt. Output goes to stdout as prose.
+
+Time parsing (`parseDateish`) supports: ISO dates (`2026-04-01`), relative days (`3d`), day names (`monday`), and keywords (`today`, `yesterday`, `last week`). Default window is 7 days.
+
+Uses `summary.RunLLM()` with a 60-second timeout (longer than the 30-second per-summary timeout since the recap prompt is larger).
 
 ## Planned features (not yet implemented)
 
-1. **AI fallback search.** When fuzzy search returns no results, fall back to a small/fast model to re-rank sessions by semantic relevance to the query. The interface should be designed so this is a pluggable search strategy, not hardcoded.
-
-2. **Raycast extension.** The `--json` output provides the data contract. A Raycast script extension would call `sesh --json`, present results in the Raycast UI, and on selection open a terminal window running the resume command.
+1. **Raycast extension.** The `--json` output provides the data contract. A Raycast script extension would call `sesh --json`, present results in the Raycast UI, and on selection open a terminal window running the resume command.
 
 ## Dependencies
 

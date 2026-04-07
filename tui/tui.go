@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -12,16 +13,27 @@ import (
 	"github.com/dru89/sesh/provider"
 )
 
+// FallbackSearchFunc is called when fuzzy search returns no results.
+// It receives the query and all sessions, and returns a ranked subset.
+// This runs in a goroutine — it can take time (e.g. LLM call).
+type FallbackSearchFunc func(ctx context.Context, query string, sessions []provider.Session) []provider.Session
+
 // Result is returned by Pick when the user selects a session.
 type Result struct {
 	Session provider.Session
 }
 
+// PickOptions configures the session picker.
+type PickOptions struct {
+	InitialQuery   string
+	FallbackSearch FallbackSearchFunc
+}
+
 // Pick launches the fzf-style TUI picker and returns the selected session.
 // The TUI renders to stderr so stdout stays clean for the shell wrapper to
 // capture the resume command.
-func Pick(sessions []provider.Session, initialQuery string) (*Result, error) {
-	m := newModel(sessions, initialQuery)
+func Pick(sessions []provider.Session, opts PickOptions) (*Result, error) {
+	m := newModel(sessions, opts)
 	p := tea.NewProgram(m, tea.WithOutput(os.Stderr), tea.WithAltScreen())
 	final, err := p.Run()
 	if err != nil {
@@ -34,21 +46,39 @@ func Pick(sessions []provider.Session, initialQuery string) (*Result, error) {
 	return &Result{Session: *fm.selected}, nil
 }
 
-// model is the bubbletea model for the session picker.
-type model struct {
-	all      []provider.Session // all sessions, sorted by last used
-	filtered []provider.Session // filtered subset
-	query    string
-	cursor   int
-	width    int
-	height   int
-	selected *provider.Session
+// --- Messages ---
+
+// fallbackResultMsg is sent when the AI fallback search completes.
+type fallbackResultMsg struct {
+	sessions []provider.Session
 }
 
-func newModel(sessions []provider.Session, query string) model {
+// --- Model ---
+
+type model struct {
+	all            []provider.Session
+	filtered       []provider.Session
+	query          string
+	cursor         int
+	width          int
+	height         int
+	selected       *provider.Session
+	fallbackSearch FallbackSearchFunc
+	fallbackCtx    context.Context
+	fallbackCancel context.CancelFunc
+	searching      bool   // true while AI fallback is running
+	searchMode     string // "fuzzy" or "ai"
+}
+
+func newModel(sessions []provider.Session, opts PickOptions) model {
+	ctx, cancel := context.WithCancel(context.Background())
 	m := model{
-		all:   sessions,
-		query: query,
+		all:            sessions,
+		query:          opts.InitialQuery,
+		fallbackSearch: opts.FallbackSearch,
+		fallbackCtx:    ctx,
+		fallbackCancel: cancel,
+		searchMode:     "fuzzy",
 	}
 	m.filter()
 	return m
@@ -65,9 +95,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
+	case fallbackResultMsg:
+		m.searching = false
+		m.searchMode = "ai"
+		m.filtered = msg.sessions
+		if m.cursor >= len(m.filtered) {
+			if len(m.filtered) > 0 {
+				m.cursor = len(m.filtered) - 1
+			} else {
+				m.cursor = 0
+			}
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.Type {
 		case tea.KeyCtrlC, tea.KeyEsc:
+			m.fallbackCancel()
 			return m, tea.Quit
 
 		case tea.KeyEnter:
@@ -75,6 +119,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				s := m.filtered[m.cursor]
 				m.selected = &s
 			}
+			m.fallbackCancel()
 			return m, tea.Quit
 
 		case tea.KeyUp:
@@ -90,15 +135,51 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyBackspace, tea.KeyDelete:
 			if len(m.query) > 0 {
 				m.query = m.query[:len(m.query)-1]
-				m.filter()
+				return m, m.filterWithFallback()
 			}
 
 		case tea.KeyRunes:
 			m.query += string(msg.Runes)
-			m.filter()
+			return m, m.filterWithFallback()
 		}
 	}
 	return m, nil
+}
+
+// filterWithFallback runs fuzzy search, and if it returns no results and a
+// fallback is configured, kicks off an async AI search.
+func (m *model) filterWithFallback() tea.Cmd {
+	m.searchMode = "fuzzy"
+	m.searching = false
+
+	if m.query == "" {
+		m.filtered = m.all
+		m.clampCursor()
+		return nil
+	}
+
+	source := sessionSource(m.all)
+	matches := fuzzy.FindFrom(m.query, source)
+	m.filtered = make([]provider.Session, len(matches))
+	for i, match := range matches {
+		m.filtered[i] = m.all[match.Index]
+	}
+	m.clampCursor()
+
+	// If fuzzy found nothing and we have a fallback, trigger it.
+	if len(m.filtered) == 0 && m.fallbackSearch != nil && len(m.query) >= 3 {
+		m.searching = true
+		query := m.query
+		all := m.all
+		fn := m.fallbackSearch
+		ctx := m.fallbackCtx
+		return func() tea.Msg {
+			results := fn(ctx, query, all)
+			return fallbackResultMsg{sessions: results}
+		}
+	}
+
+	return nil
 }
 
 func (m *model) filter() {
@@ -112,6 +193,10 @@ func (m *model) filter() {
 			m.filtered[i] = m.all[match.Index]
 		}
 	}
+	m.clampCursor()
+}
+
+func (m *model) clampCursor() {
 	if m.cursor >= len(m.filtered) {
 		if len(m.filtered) > 0 {
 			m.cursor = len(m.filtered) - 1
@@ -133,6 +218,7 @@ var (
 	idStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	dirStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Italic(true)
 	helpStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	aiStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
 
 	agentColors = map[string]lipgloss.Color{
 		"opencode": lipgloss.Color("4"), // blue
@@ -161,7 +247,11 @@ func (m model) View() string {
 	// Prompt line.
 	b.WriteString(promptStyle.Render("> "))
 	b.WriteString(m.query)
-	b.WriteString(countStyle.Render(fmt.Sprintf("  %d/%d", len(m.filtered), len(m.all))))
+	countStr := fmt.Sprintf("  %d/%d", len(m.filtered), len(m.all))
+	if m.searchMode == "ai" {
+		countStr += " (AI)"
+	}
+	b.WriteString(countStyle.Render(countStr))
 	b.WriteString("\n")
 	b.WriteString(strings.Repeat("─", clamp(w, 1, 120)))
 	b.WriteString("\n")
@@ -188,7 +278,6 @@ func (m model) View() string {
 
 		// Agent badge (padded to 10 chars).
 		badge := renderAgent(s.Agent)
-		// Pad badge to uniform width — agent names vary.
 		badgePad := 10 - len(s.Agent)
 		if badgePad < 1 {
 			badgePad = 1
@@ -197,7 +286,7 @@ func (m model) View() string {
 		// Title.
 		title := s.DisplayTitle()
 		sid := truncateID(s.ID, 10)
-		maxTitleW := w - 36 // badge(10) + cursor(2) + time(~10) + id(~12) + padding
+		maxTitleW := w - 36
 		if maxTitleW < 20 {
 			maxTitleW = 20
 		}
@@ -240,7 +329,9 @@ func (m model) View() string {
 		}
 	}
 
-	if len(m.filtered) == 0 {
+	if m.searching {
+		b.WriteString(aiStyle.Render("  Searching with AI...") + "\n")
+	} else if len(m.filtered) == 0 {
 		b.WriteString(dimStyle.Render("  No matching sessions") + "\n")
 	}
 
@@ -252,7 +343,6 @@ func (m model) View() string {
 
 // --- Helpers ---
 
-// sessionSource implements fuzzy.Source.
 type sessionSource []provider.Session
 
 func (s sessionSource) String(i int) string { return s[i].SearchText }

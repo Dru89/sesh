@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dru89/sesh/provider"
 	"github.com/dru89/sesh/summary"
@@ -19,7 +20,77 @@ import (
 // config is the user configuration loaded from ~/.config/sesh/config.json.
 type config struct {
 	Providers map[string]providerConfig `json:"providers"`
-	Summary   summary.Config            `json:"summary"`
+	Index     commandConfig             `json:"index"`
+	Ask       askConfig                 `json:"ask"`
+	Recap     commandConfig             `json:"recap"`
+}
+
+// commandConfig holds a command + prompt pair for a subcommand.
+type commandConfig struct {
+	Command []string `json:"command,omitempty"`
+	Prompt  string   `json:"prompt,omitempty"`
+}
+
+// askConfig extends commandConfig with a separate filter command.
+type askConfig struct {
+	Command       []string `json:"command,omitempty"`
+	Prompt        string   `json:"prompt,omitempty"`
+	FilterCommand []string `json:"filter_command,omitempty"`
+}
+
+// resolveCommand walks a fallback chain and returns the first non-empty command.
+func resolveCommand(candidates ...[]string) []string {
+	for _, cmd := range candidates {
+		if len(cmd) > 0 {
+			return cmd
+		}
+	}
+	return nil
+}
+
+// indexCommand returns the resolved command for title generation (sesh index).
+// Fallback: index -> recap -> ask -> ask.filter_command
+func (c config) indexCommand() []string {
+	return resolveCommand(c.Index.Command, c.Recap.Command, c.Ask.Command, c.Ask.FilterCommand)
+}
+
+// askCommand returns the resolved command for prose generation (sesh ask pass 2).
+// Fallback: ask -> recap -> index
+func (c config) askCommand() []string {
+	return resolveCommand(c.Ask.Command, c.Recap.Command, c.Index.Command)
+}
+
+// askFilterCommand returns the resolved command for session filtering (sesh ask pass 1, AI fallback).
+// Fallback: ask.filter_command -> index -> ask -> recap
+func (c config) askFilterCommand() []string {
+	return resolveCommand(c.Ask.FilterCommand, c.Index.Command, c.Ask.Command, c.Recap.Command)
+}
+
+// recapCommand returns the resolved command for recap prose generation.
+// Fallback: recap -> ask -> index
+func (c config) recapCommand() []string {
+	return resolveCommand(c.Recap.Command, c.Ask.Command, c.Index.Command)
+}
+
+// indexPrompt returns the prompt for title generation.
+func (c config) indexPrompt() string {
+	if c.Index.Prompt != "" {
+		return c.Index.Prompt
+	}
+	return ""
+}
+
+// hasAnyCommand returns true if any LLM command is configured.
+func (c config) hasAnyCommand() bool {
+	return len(c.indexCommand()) > 0
+}
+
+// summaryConfig builds a summary.Config from the resolved index command/prompt.
+func (c config) summaryConfig() summary.Config {
+	return summary.Config{
+		Command: c.indexCommand(),
+		Prompt:  c.indexPrompt(),
+	}
 }
 
 type providerConfig struct {
@@ -50,9 +121,18 @@ type jsonSession struct {
 
 func main() {
 	// Check for subcommands before flag parsing.
-	if len(os.Args) > 1 && os.Args[1] == "index" {
-		runIndex(os.Args[2:])
-		return
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "index":
+			runIndex(os.Args[2:])
+			return
+		case "recap":
+			runRecap(os.Args[2:])
+			return
+		case "ask":
+			runAsk(os.Args[2:])
+			return
+		}
 	}
 
 	jsonMode := flag.Bool("json", false, "Output session list as JSON and exit")
@@ -61,7 +141,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Usage: sesh [options] [query]\n\n")
 		fmt.Fprintf(os.Stderr, "A unified session browser for coding agents.\n\n")
 		fmt.Fprintf(os.Stderr, "Commands:\n")
-		fmt.Fprintf(os.Stderr, "  index    Generate summaries for all sessions\n\n")
+		fmt.Fprintf(os.Stderr, "  index    Generate summaries for all sessions\n")
+		fmt.Fprintf(os.Stderr, "  recap    Summarize what you worked on over a time period\n")
+		fmt.Fprintf(os.Stderr, "  ask      Ask a natural language question about your sessions\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nConfig: ~/.config/sesh/config.json\n")
@@ -113,12 +195,17 @@ func main() {
 	}
 
 	// Kick off lazy background summary generation for unsummarized sessions.
-	if cfg.Summary.IsEnabled() {
-		go lazyIndex(ctx, cfg.Summary, cache, all, providers)
+	if cfg.hasAnyCommand() {
+		go lazyIndex(ctx, cfg.summaryConfig(), cache, all, providers)
 	}
 
 	// Run the TUI picker.
-	result, err := tui.Pick(all, query)
+	pickOpts := tui.PickOptions{InitialQuery: query}
+	if filterCmd := cfg.askFilterCommand(); len(filterCmd) > 0 {
+		pickOpts.FallbackSearch = buildFallbackSearch(filterCmd)
+	}
+
+	result, err := tui.Pick(all, pickOpts)
 	if err != nil {
 		// Save any summaries generated in the background before exiting.
 		cache.Save()
@@ -152,10 +239,10 @@ func runIndex(args []string) {
 	fs.Parse(args)
 
 	cfg := loadConfig()
-	if !cfg.Summary.IsEnabled() {
-		fmt.Fprintf(os.Stderr, "sesh: summary generation not configured\n")
-		fmt.Fprintf(os.Stderr, "sesh: add a \"summary\" section to ~/.config/sesh/config.json:\n")
-		fmt.Fprintf(os.Stderr, "  {\n    \"summary\": {\n      \"command\": [\"llm\", \"-m\", \"haiku\"]\n    }\n  }\n")
+	if !cfg.hasAnyCommand() {
+		fmt.Fprintf(os.Stderr, "sesh: no LLM command configured\n")
+		fmt.Fprintf(os.Stderr, "sesh: add an \"index\" section to ~/.config/sesh/config.json:\n")
+		fmt.Fprintf(os.Stderr, "  {\n    \"index\": {\n      \"command\": [\"llm\", \"-m\", \"haiku\"]\n    }\n  }\n")
 		os.Exit(1)
 	}
 
@@ -207,7 +294,7 @@ func runIndex(args []string) {
 		})
 	}
 
-	gen := summary.NewGenerator(cfg.Summary)
+	gen := summary.NewGenerator(cfg.summaryConfig())
 	succeeded := gen.GenerateBatch(ctx, items, cache, func(i, total int, id string, err error) {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  [%d/%d] %s: error: %v\n", i, total, id, err)
@@ -271,6 +358,298 @@ func lazyIndex(ctx context.Context, cfg summary.Config, cache *summary.Cache, se
 
 	gen := summary.NewGenerator(cfg)
 	gen.GenerateBatch(ctx, items, cache, nil)
+}
+
+// runRecap handles the `sesh recap` subcommand.
+func runRecap(args []string) {
+	fs := flag.NewFlagSet("recap", flag.ExitOnError)
+	since := fs.String("since", "", "Start date (e.g. 'monday', '2026-04-01', '3d')")
+	until := fs.String("until", "", "End date (default: now)")
+	days := fs.Int("days", 0, "Number of days to look back (shorthand for --since)")
+	agentFilter := fs.String("agent", "", "Only include sessions for a specific agent")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: sesh recap [options]\n\n")
+		fmt.Fprintf(os.Stderr, "Summarize what you worked on across all agent sessions.\n")
+		fmt.Fprintf(os.Stderr, "Requires summary.command to be configured.\n\n")
+		fmt.Fprintf(os.Stderr, "Examples:\n")
+		fmt.Fprintf(os.Stderr, "  sesh recap --days 7        # last 7 days\n")
+		fmt.Fprintf(os.Stderr, "  sesh recap --since monday  # since Monday\n")
+		fmt.Fprintf(os.Stderr, "  sesh recap --since 2026-04-01 --until 2026-04-07\n\n")
+		fmt.Fprintf(os.Stderr, "Options:\n")
+		fs.PrintDefaults()
+	}
+	fs.Parse(args)
+
+	cfg := loadConfig()
+	recapCmd := cfg.recapCommand()
+	if len(recapCmd) == 0 {
+		fmt.Fprintf(os.Stderr, "sesh: no LLM command configured for recap\n")
+		os.Exit(1)
+	}
+
+	// Parse time range.
+	start, end := parseTimeRange(*since, *until, *days)
+
+	providers := buildProviders(cfg)
+	cache := summary.NewCache()
+	ctx := context.Background()
+
+	all := collectSessions(ctx, providers, *agentFilter)
+	applySummaries(all, cache)
+
+	// Filter sessions to the time range.
+	var inRange []provider.Session
+	for _, s := range all {
+		if (s.LastUsed.After(start) || s.LastUsed.Equal(start)) &&
+			(s.LastUsed.Before(end) || s.LastUsed.Equal(end)) {
+			inRange = append(inRange, s)
+		}
+	}
+
+	sort.Slice(inRange, func(i, j int) bool {
+		return inRange[i].LastUsed.Before(inRange[j].LastUsed)
+	})
+
+	if len(inRange) == 0 {
+		fmt.Fprintf(os.Stderr, "No sessions found in the specified time range.\n")
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "Found %d sessions from %s to %s. Generating recap...\n",
+		len(inRange), start.Format("Jan 2"), end.Format("Jan 2"))
+
+	// Build the recap input: a list of sessions with their summaries/titles,
+	// agents, directories, and timestamps.
+	var recapInput strings.Builder
+	for _, s := range inRange {
+		title := s.DisplayTitle()
+		dir := s.Directory
+		agent := s.Agent
+		when := s.LastUsed.Format("Mon Jan 2 3:04pm")
+		recapInput.WriteString(fmt.Sprintf("- [%s] %s | %s | %s\n", agent, title, dir, when))
+	}
+
+	prompt := fmt.Sprintf(
+		"Here are my coding agent sessions from %s to %s. "+
+			"Each line has the agent name, a session summary or title, the working directory, and the date.\n\n"+
+			"Write a concise recap of what I worked on during this period. "+
+			"Group related work together. Focus on what was accomplished, not the tools used. "+
+			"Use plain text, no markdown formatting.\n\n%s",
+		start.Format("Mon Jan 2"), end.Format("Mon Jan 2"), recapInput.String())
+
+	result, err := summary.RunLLM(ctx, recapCmd, prompt, 60*time.Second)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sesh: recap failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println(result)
+}
+
+// runAsk handles the `sesh ask` subcommand.
+func runAsk(args []string) {
+	fs := flag.NewFlagSet("ask", flag.ExitOnError)
+	agentFilter := fs.String("agent", "", "Only include sessions for a specific agent")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: sesh ask [options] <question>\n\n")
+		fmt.Fprintf(os.Stderr, "Ask a natural language question about your coding sessions.\n")
+		fmt.Fprintf(os.Stderr, "Requires summary.command to be configured.\n\n")
+		fmt.Fprintf(os.Stderr, "Examples:\n")
+		fmt.Fprintf(os.Stderr, "  sesh ask \"What did I work on with auth last week?\"\n")
+		fmt.Fprintf(os.Stderr, "  sesh ask \"Show me everything related to the API gateway\"\n")
+		fmt.Fprintf(os.Stderr, "  sesh ask --agent claude \"What refactoring have I done recently?\"\n\n")
+		fmt.Fprintf(os.Stderr, "Options:\n")
+		fs.PrintDefaults()
+	}
+	fs.Parse(args)
+
+	question := strings.Join(fs.Args(), " ")
+	if question == "" {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	cfg := loadConfig()
+	askCmd := cfg.askCommand()
+	filterCmd := cfg.askFilterCommand()
+	if len(askCmd) == 0 && len(filterCmd) == 0 {
+		fmt.Fprintf(os.Stderr, "sesh: no LLM command configured for ask\n")
+		os.Exit(1)
+	}
+	// If only one is available, use it for both.
+	if len(filterCmd) == 0 {
+		filterCmd = askCmd
+	}
+	if len(askCmd) == 0 {
+		askCmd = filterCmd
+	}
+
+	providers := buildProviders(cfg)
+	cache := summary.NewCache()
+	ctx := context.Background()
+
+	all := collectSessions(ctx, providers, *agentFilter)
+	applySummaries(all, cache)
+
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].LastUsed.After(all[j].LastUsed)
+	})
+
+	if len(all) == 0 {
+		fmt.Fprintf(os.Stderr, "No sessions found.\n")
+		return
+	}
+
+	// --- Pass 1: Filter — ask the LLM which sessions are relevant. ---
+
+	var numberedList strings.Builder
+	for i, s := range all {
+		title := s.DisplayTitle()
+		if len(title) > 100 {
+			title = title[:97] + "..."
+		}
+		when := s.LastUsed.Format("Mon Jan 2 3:04pm")
+		numberedList.WriteString(fmt.Sprintf("%d. [%s] %s | %s | %s\n",
+			i+1, s.Agent, title, s.Directory, when))
+	}
+
+	filterPrompt := fmt.Sprintf(
+		"I'm looking through my coding agent sessions to answer this question:\n%s\n\n"+
+			"Below is a numbered list of sessions. Each has the agent name, "+
+			"session summary/title, working directory, and date.\n\n"+
+			"%s\n"+
+			"Return ONLY the numbers of sessions relevant to my question, "+
+			"one per line, most relevant first. Return at most 20. "+
+			"If none are relevant, return nothing.",
+		question, numberedList.String())
+
+	fmt.Fprintf(os.Stderr, "Searching %d sessions...\n", len(all))
+
+	filterResult, err := summary.RunLLM(ctx, filterCmd, filterPrompt, 30*time.Second)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sesh: ask failed during filtering: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Parse the numbered results from pass 1.
+	var relevant []provider.Session
+	for _, line := range strings.Split(filterResult, "\n") {
+		line = strings.TrimSpace(line)
+		var num int
+		if _, err := fmt.Sscanf(line, "%d", &num); err == nil {
+			idx := num - 1
+			if idx >= 0 && idx < len(all) {
+				relevant = append(relevant, all[idx])
+			}
+		}
+		if len(relevant) >= 20 {
+			break
+		}
+	}
+
+	if len(relevant) == 0 {
+		fmt.Fprintf(os.Stderr, "No relevant sessions found for that question.\n")
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "Found %d relevant sessions. Generating answer...\n", len(relevant))
+
+	// --- Pass 2: Generate — answer the question using only the relevant sessions. ---
+
+	var detailList strings.Builder
+	for _, s := range relevant {
+		title := s.DisplayTitle()
+		when := s.LastUsed.Format("Mon Jan 2 3:04pm")
+		detailList.WriteString(fmt.Sprintf("- [%s] %s | %s | %s\n",
+			s.Agent, title, s.Directory, when))
+	}
+
+	answerPrompt := fmt.Sprintf(
+		"Here are my coding agent sessions relevant to my question. "+
+			"Each line has the agent name, session summary/title, working directory, and date.\n\n"+
+			"%s\n"+
+			"My question: %s\n\n"+
+			"Answer my question based on these sessions. Be specific about what was worked on. "+
+			"Use plain text, no markdown formatting.",
+		detailList.String(), question)
+
+	result, err := summary.RunLLM(ctx, askCmd, answerPrompt, 60*time.Second)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sesh: ask failed during answer generation: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println(result)
+}
+
+// parseTimeRange interprets the --since, --until, and --days flags.
+func parseTimeRange(since, until string, days int) (time.Time, time.Time) {
+	now := time.Now()
+	end := now
+
+	if until != "" {
+		if t, err := time.ParseInLocation("2006-01-02", until, time.Local); err == nil {
+			end = t.Add(24*time.Hour - time.Second) // end of day
+		}
+	}
+
+	var start time.Time
+	if days > 0 {
+		start = now.AddDate(0, 0, -days)
+	} else if since != "" {
+		start = parseDateish(since, now)
+	} else {
+		// Default: last 7 days.
+		start = now.AddDate(0, 0, -7)
+	}
+
+	return start, end
+}
+
+// parseDateish parses flexible date inputs.
+func parseDateish(s string, now time.Time) time.Time {
+	s = strings.ToLower(strings.TrimSpace(s))
+
+	// Try exact date.
+	if t, err := time.ParseInLocation("2006-01-02", s, time.Local); err == nil {
+		return t
+	}
+
+	// Relative days: "3d", "7d".
+	if strings.HasSuffix(s, "d") {
+		var d int
+		if _, err := fmt.Sscanf(s, "%dd", &d); err == nil {
+			return now.AddDate(0, 0, -d)
+		}
+	}
+
+	// Day names: "monday", "tuesday", etc.
+	dayNames := map[string]time.Weekday{
+		"sunday": time.Sunday, "monday": time.Monday, "tuesday": time.Tuesday,
+		"wednesday": time.Wednesday, "thursday": time.Thursday,
+		"friday": time.Friday, "saturday": time.Saturday,
+	}
+	if target, ok := dayNames[s]; ok {
+		current := now.Weekday()
+		diff := int(current - target)
+		if diff <= 0 {
+			diff += 7
+		}
+		return time.Date(now.Year(), now.Month(), now.Day()-diff, 0, 0, 0, 0, time.Local)
+	}
+
+	// Keywords.
+	switch s {
+	case "today":
+		return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
+	case "yesterday":
+		return time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, time.Local)
+	case "last week":
+		return now.AddDate(0, 0, -7)
+	}
+
+	// Fallback: 7 days.
+	return now.AddDate(0, 0, -7)
 }
 
 // collectSessions gathers sessions from all providers, with warnings on failure.
@@ -392,4 +771,50 @@ func providersByName(providers []provider.Provider) map[string]provider.Provider
 		m[p.Name()] = p
 	}
 	return m
+}
+
+// buildFallbackSearch returns a function that uses the configured LLM to
+// semantically search sessions when fuzzy search returns no results.
+func buildFallbackSearch(command []string) tui.FallbackSearchFunc {
+	return func(ctx context.Context, query string, sessions []provider.Session) []provider.Session {
+		// Build a numbered list of sessions with their summaries/titles.
+		var input strings.Builder
+		input.WriteString(fmt.Sprintf(
+			"I'm searching my coding agent sessions for: %q\n\n"+
+				"Below is a numbered list of sessions. Return ONLY the numbers of "+
+				"sessions that are relevant to my search, one per line, most relevant first. "+
+				"Return at most 10 numbers. If none are relevant, return nothing.\n\n", query))
+
+		for i, s := range sessions {
+			title := s.DisplayTitle()
+			if len(title) > 100 {
+				title = title[:97] + "..."
+			}
+			input.WriteString(fmt.Sprintf("%d. [%s] %s | %s\n", i+1, s.Agent, title, s.Directory))
+		}
+
+		result, err := summary.RunLLM(ctx, command, input.String(), 30*time.Second)
+		if err != nil {
+			return nil
+		}
+
+		// Parse the numbered results.
+		var matched []provider.Session
+		for _, line := range strings.Split(result, "\n") {
+			line = strings.TrimSpace(line)
+			// Extract number from various formats: "1", "1.", "1 -", etc.
+			var num int
+			if _, err := fmt.Sscanf(line, "%d", &num); err == nil {
+				idx := num - 1
+				if idx >= 0 && idx < len(sessions) {
+					matched = append(matched, sessions[idx])
+				}
+			}
+			if len(matched) >= 10 {
+				break
+			}
+		}
+
+		return matched
+	}
 }

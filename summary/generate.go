@@ -39,9 +39,6 @@ func NewGenerator(cfg Config) *Generator {
 }
 
 // Generate produces a summary for the given session text.
-// The text should be a concatenation of user prompts from the session.
-// Returns the summary string or an error. Errors are non-fatal — callers
-// should log and continue.
 func (g *Generator) Generate(ctx context.Context, sessionText string) (string, error) {
 	if !g.config.IsEnabled() {
 		return "", fmt.Errorf("summary generation not configured")
@@ -53,38 +50,17 @@ func (g *Generator) Generate(ctx context.Context, sessionText string) (string, e
 	}
 
 	input := prompt + "\n\n" + sessionText
-
-	// Apply a per-summary timeout so one slow call doesn't block everything.
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, g.config.Command[0], g.config.Command[1:]...)
-	cmd.Stdin = strings.NewReader(input)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		errMsg := strings.TrimSpace(stderr.String())
-		if errMsg != "" {
-			return "", fmt.Errorf("summary command failed: %w: %s", err, errMsg)
-		}
-		return "", fmt.Errorf("summary command failed: %w", err)
+	result, err := RunLLM(ctx, g.config.Command, input, 30*time.Second)
+	if err != nil {
+		return "", err
 	}
 
-	summary := strings.TrimSpace(stdout.String())
-	if summary == "" {
-		return "", fmt.Errorf("summary command returned empty output")
+	// Truncate very long summaries.
+	if len(result) > 200 {
+		result = result[:197] + "..."
 	}
 
-	// Truncate very long summaries (the command should respect the prompt,
-	// but we cap it defensively).
-	if len(summary) > 200 {
-		summary = summary[:197] + "..."
-	}
-
-	return summary, nil
+	return result, nil
 }
 
 // GenerateBatch generates summaries for multiple sessions, calling the
@@ -113,4 +89,39 @@ type BatchItem struct {
 	ID       string
 	LastUsed time.Time
 	Text     string // concatenated user prompts
+}
+
+// RunLLM sends input to the configured LLM command and returns the output.
+// This is the shared execution function used by summary generation, recap,
+// and AI fallback search. The command receives input on stdin and should
+// write its response to stdout.
+func RunLLM(ctx context.Context, command []string, input string, timeout time.Duration) (string, error) {
+	if len(command) == 0 {
+		return "", fmt.Errorf("no LLM command configured")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+	cmd.Stdin = strings.NewReader(input)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		errMsg := strings.TrimSpace(stderr.String())
+		if errMsg != "" {
+			return "", fmt.Errorf("command failed: %w: %s", err, errMsg)
+		}
+		return "", fmt.Errorf("command failed: %w", err)
+	}
+
+	result := strings.TrimSpace(stdout.String())
+	if result == "" {
+		return "", fmt.Errorf("command returned empty output")
+	}
+
+	return result, nil
 }
