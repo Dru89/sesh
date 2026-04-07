@@ -34,15 +34,34 @@ Open the extension preferences in Raycast to configure:
 
 ## Usage
 
+### Search Sessions
+
 1. Open Raycast and search for "Search Sessions" (or set a hotkey)
 2. Type to filter sessions by title, agent, directory, or summary
 3. Press Enter to resume the selected session in your terminal
-4. Use the action panel (Cmd+K) for additional actions:
-   - Copy resume command
-   - Copy session ID
-   - Open directory in Finder
-   - Open directory in VS Code
+4. Press Cmd+D to toggle a detail pane with session metadata
+5. If search returns no results, press Enter on the empty view to trigger an AI search
+6. Press Cmd+Shift+A at any time to run an AI search with the current query
+
+### AI Search Sessions
+
+1. Open Raycast and search for "AI Search Sessions"
+2. Type a natural language query (e.g., "auth token refresh work last week")
+3. After a brief pause, the LLM filters sessions and returns the most relevant matches
+4. Press Enter to resume a session
+
+AI search requires an LLM command to be configured in `~/.config/sesh/config.json` (see the main [README](../README.md#llm-configuration)).
+
+### Actions
+
+- **Resume Session** (Enter) — open a terminal and resume
+- **Toggle Detail** (Cmd+D) — show/hide session metadata pane
+- **Search with AI** (Cmd+Shift+A) — re-rank results using AI
+- **Copy Resume Command** (Cmd+Shift+C)
+- **Copy Session ID** (Cmd+I)
+- **Open in Finder** (Cmd+O)
+- **Open in VS Code** (Cmd+Shift+O)
 
 ## How it works
 
-The extension runs `sesh --json` to get the full session list, then presents it using Raycast's built-in List view with fuzzy search. When you select a session, it uses AppleScript (for Terminal.app and iTerm2), CLI flags (for Ghostty), or deep links (for Warp) to open a new terminal window and run the resume command.
+The extension runs `sesh --json` to get the full session list, then presents it using Raycast's built-in List view with fuzzy search. AI search uses `sesh --json --ai-search "query"` which runs the same LLM filter pass as the TUI's AI fallback. When you select a session, it uses AppleScript (for Terminal.app and iTerm2), CLI flags (for Ghostty), or deep links (for Warp) to open a new terminal window and run the resume command.

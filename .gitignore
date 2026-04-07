@@ -1,4 +1,4 @@
-sesh
+/sesh
 *.exe
 raycast/node_modules/
 raycast/dist/

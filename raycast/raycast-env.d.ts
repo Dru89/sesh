@@ -22,10 +22,14 @@ declare type Preferences = ExtensionPreferences
 declare namespace Preferences {
   /** Preferences accessible in the `search-sessions` command */
   export type SearchSessions = ExtensionPreferences & {}
+  /** Preferences accessible in the `ai-search-sessions` command */
+  export type AiSearchSessions = ExtensionPreferences & {}
 }
 
 declare namespace Arguments {
   /** Arguments passed to the `search-sessions` command */
   export type SearchSessions = {}
+  /** Arguments passed to the `ai-search-sessions` command */
+  export type AiSearchSessions = {}
 }
 

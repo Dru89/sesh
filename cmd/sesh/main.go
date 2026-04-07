@@ -185,6 +185,7 @@ func main() {
 	}
 
 	jsonMode := flag.Bool("json", false, "Output session list as JSON and exit")
+	aiSearch := flag.String("ai-search", "", "AI-ranked search query (use with --json)")
 	agentFilter := flag.String("agent", "", "Filter by agent name")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: sesh [options] [query]\n\n")
@@ -224,11 +225,23 @@ func main() {
 
 	// JSON mode: dump and exit.
 	if *jsonMode {
-		providerMap := providersByName(providers)
+		sessions := all
+
+		// AI search: filter through LLM if query provided.
+		if *aiSearch != "" {
+			filterCmd := cfg.askFilterCommand()
+			if len(filterCmd) == 0 {
+				fmt.Fprintf(os.Stderr, "sesh: --ai-search requires an LLM command to be configured\n")
+				os.Exit(1)
+			}
+			sessions = aiFilterSessions(ctx, filterCmd, *aiSearch, sessions)
+		}
+
+		pMap := providersByName(providers)
 		var out []jsonSession
-		for _, s := range all {
+		for _, s := range sessions {
 			var cmd string
-			if p, ok := providerMap[s.Agent]; ok {
+			if p, ok := pMap[s.Agent]; ok {
 				cmd = p.ResumeCommand(s)
 			}
 			out = append(out, jsonSession{Session: s, ResumeCommand: cmd})
@@ -1327,44 +1340,48 @@ func computeStats(sessions []provider.Session) sessionStats {
 // semantically search sessions when fuzzy search returns no results.
 func buildFallbackSearch(command []string) tui.FallbackSearchFunc {
 	return func(ctx context.Context, query string, sessions []provider.Session) []provider.Session {
-		// Build a numbered list of sessions with their summaries/titles.
-		var input strings.Builder
-		input.WriteString(fmt.Sprintf(
-			"I'm searching my coding agent sessions for: %q\n\n"+
-				"Below is a numbered list of sessions. Return ONLY the numbers of "+
-				"sessions that are relevant to my search, one per line, most relevant first. "+
-				"Return at most 10 numbers. If none are relevant, return nothing.\n\n", query))
-
-		for i, s := range sessions {
-			title := s.DisplayTitle()
-			if len(title) > 100 {
-				title = title[:97] + "..."
-			}
-			input.WriteString(fmt.Sprintf("%d. [%s] %s | %s\n", i+1, s.Agent, title, s.Directory))
-		}
-
-		result, err := summary.RunLLM(ctx, command, input.String(), 30*time.Second)
-		if err != nil {
-			return nil
-		}
-
-		// Parse the numbered results.
-		var matched []provider.Session
-		for _, line := range strings.Split(result, "\n") {
-			line = strings.TrimSpace(line)
-			// Extract number from various formats: "1", "1.", "1 -", etc.
-			var num int
-			if _, err := fmt.Sscanf(line, "%d", &num); err == nil {
-				idx := num - 1
-				if idx >= 0 && idx < len(sessions) {
-					matched = append(matched, sessions[idx])
-				}
-			}
-			if len(matched) >= 10 {
-				break
-			}
-		}
-
-		return matched
+		return aiFilterSessions(ctx, command, query, sessions)
 	}
+}
+
+// aiFilterSessions sends a query + numbered session list to the LLM and returns
+// the sessions it identifies as relevant. Used by --ai-search, TUI fallback,
+// and the ask subcommand's pass 1.
+func aiFilterSessions(ctx context.Context, command []string, query string, sessions []provider.Session) []provider.Session {
+	var input strings.Builder
+	input.WriteString(fmt.Sprintf(
+		"I'm searching my coding agent sessions for: %q\n\n"+
+			"Below is a numbered list of sessions. Return ONLY the numbers of "+
+			"sessions that are relevant to my search, one per line, most relevant first. "+
+			"Return at most 10 numbers. If none are relevant, return nothing.\n\n", query))
+
+	for i, s := range sessions {
+		title := s.DisplayTitle()
+		if len(title) > 100 {
+			title = title[:97] + "..."
+		}
+		input.WriteString(fmt.Sprintf("%d. [%s] %s | %s\n", i+1, s.Agent, title, s.Directory))
+	}
+
+	result, err := summary.RunLLM(ctx, command, input.String(), 30*time.Second)
+	if err != nil {
+		return nil
+	}
+
+	var matched []provider.Session
+	for _, line := range strings.Split(result, "\n") {
+		line = strings.TrimSpace(line)
+		var num int
+		if _, err := fmt.Sscanf(line, "%d", &num); err == nil {
+			idx := num - 1
+			if idx >= 0 && idx < len(sessions) {
+				matched = append(matched, sessions[idx])
+			}
+		}
+		if len(matched) >= 10 {
+			break
+		}
+	}
+
+	return matched
 }

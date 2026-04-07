@@ -14,6 +14,13 @@
       "subtitle": "sesh",
       "description": "Search and resume coding agent sessions",
       "mode": "view"
+    },
+    {
+      "name": "ai-search-sessions",
+      "title": "AI Search Sessions",
+      "subtitle": "sesh",
+      "description": "Search sessions using AI — type a natural language query",
+      "mode": "view"
     }
   ],
   "preferences": [
