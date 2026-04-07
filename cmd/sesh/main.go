@@ -16,7 +16,11 @@ import (
 	"github.com/dru89/sesh/provider"
 	"github.com/dru89/sesh/summary"
 	"github.com/dru89/sesh/tui"
+	"github.com/dru89/sesh/update"
 )
+
+// version is set at build time via ldflags.
+var version = "dev"
 
 // config is the user configuration loaded from ~/.config/sesh/config.json.
 type config struct {
@@ -181,6 +185,12 @@ func main() {
 		case "stats":
 			runStats(os.Args[2:])
 			return
+		case "version":
+			fmt.Printf("sesh %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
+			return
+		case "update":
+			runUpdate()
+			return
 		}
 	}
 
@@ -197,7 +207,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  stats    Show session statistics\n")
 		fmt.Fprintf(os.Stderr, "  index    Generate summaries for all sessions\n")
 		fmt.Fprintf(os.Stderr, "  recap    Summarize what you worked on over a time period\n")
-		fmt.Fprintf(os.Stderr, "  ask      Ask a natural language question about your sessions\n\n")
+		fmt.Fprintf(os.Stderr, "  ask      Ask a natural language question about your sessions\n")
+		fmt.Fprintf(os.Stderr, "  update   Update sesh to the latest version\n")
+		fmt.Fprintf(os.Stderr, "  version  Print version information\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nConfig: ~/.config/sesh/config.json\n")
@@ -272,6 +284,9 @@ func main() {
 			fmt.Fprintf(os.Stderr, "sesh: %d sessions without summaries. Run 'sesh index' to generate them.\n", unsummarized)
 		}
 	}
+
+	// Background version check (non-blocking, cached for 24h).
+	go checkVersionBackground()
 
 	// Kick off lazy background summary generation for unsummarized sessions.
 	if cfg.hasAnyCommand() {
@@ -721,6 +736,9 @@ func runList(args []string) {
 		fmt.Fprintf(os.Stderr, "No sessions found.\n")
 		return
 	}
+
+	// Version check (synchronous but cached — only hits network once per day).
+	checkVersionSync()
 
 	// Detect if stdout is a terminal for color output.
 	isTTY := isTerminal()
@@ -1384,4 +1402,76 @@ func aiFilterSessions(ctx context.Context, command []string, query string, sessi
 	}
 
 	return matched
+}
+
+// runUpdate checks for and installs the latest version.
+func runUpdate() {
+	fmt.Fprintf(os.Stderr, "Current version: %s\n", version)
+	fmt.Fprintf(os.Stderr, "Checking for updates...\n")
+
+	release, err := update.CheckLatest()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sesh: failed to check for updates: %v\n", err)
+		os.Exit(1)
+	}
+
+	latest := strings.TrimPrefix(release.TagName, "v")
+	update.SaveCache(latest)
+
+	if !update.IsNewer(version, latest) {
+		fmt.Fprintf(os.Stderr, "Already up to date (v%s).\n", version)
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "New version available: v%s -> v%s\n", version, latest)
+
+	url, err := update.FindAsset(release)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sesh: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Download manually: %s\n", release.HTMLURL)
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(os.Stderr, "Downloading v%s...\n", latest)
+	if err := update.DownloadAndReplace(url); err != nil {
+		fmt.Fprintf(os.Stderr, "sesh: update failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Download manually: %s\n", release.HTMLURL)
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(os.Stderr, "Updated to v%s.\n", latest)
+}
+
+// checkVersionBackground checks for updates in a goroutine and prints
+// a hint to stderr. Non-blocking — the TUI launches immediately.
+func checkVersionBackground() {
+	// Check cache first.
+	if vc := update.CheckCached(); vc != nil {
+		if update.IsNewer(version, vc.Latest) {
+			fmt.Fprintf(os.Stderr, "sesh: update available (v%s -> v%s). Run 'sesh update' to install.\n", version, vc.Latest)
+		}
+		return
+	}
+
+	// Cache miss — check GitHub (this blocks the goroutine, not the main thread).
+	release, err := update.CheckLatest()
+	if err != nil {
+		return // silently ignore network errors
+	}
+	latest := strings.TrimPrefix(release.TagName, "v")
+	update.SaveCache(latest)
+	if update.IsNewer(version, latest) {
+		fmt.Fprintf(os.Stderr, "sesh: update available (v%s -> v%s). Run 'sesh update' to install.\n", version, latest)
+	}
+}
+
+// checkVersionSync checks for updates synchronously using the cache.
+// Only prints if a cached check indicates an update is available.
+// Does NOT hit the network — call this from non-interactive commands.
+func checkVersionSync() {
+	if vc := update.CheckCached(); vc != nil {
+		if update.IsNewer(version, vc.Latest) {
+			fmt.Fprintf(os.Stderr, "sesh: update available (v%s -> v%s). Run 'sesh update' to install.\n", version, vc.Latest)
+		}
+	}
 }
