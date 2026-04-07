@@ -15,6 +15,7 @@ export default function SearchSessions() {
   const [searchText, setSearchText] = useState("");
   const [aiResults, setAiResults] = useState<SeshSession[] | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
+  const [filteredEmpty, setFilteredEmpty] = useState(false);
 
   const { data: sessions, isLoading } = useCachedPromise(
     async () => loadSessions(),
@@ -28,19 +29,27 @@ export default function SearchSessions() {
   function handleAiSearch() {
     if (!searchText.trim()) return;
     setAiLoading(true);
-    // Run async to not block the UI thread.
     setTimeout(() => {
       const results = aiSearchSessions(searchText);
-      setAiResults(results);
+      setAiResults(results ?? []);
       setAiLoading(false);
     }, 0);
   }
 
   function handleSearchChange(text: string) {
     setSearchText(text);
-    // Clear AI results when the user changes the search text.
+    setFilteredEmpty(false);
     if (aiResults !== null) {
       setAiResults(null);
+    }
+  }
+
+  // Raycast calls onSelectionChange with null when all items are filtered out.
+  function handleSelectionChange(id: string | null) {
+    if (id === null && searchText.length >= 3 && !isLoading && displaySessions.length > 0) {
+      setFilteredEmpty(true);
+    } else {
+      setFilteredEmpty(false);
     }
   }
 
@@ -50,62 +59,57 @@ export default function SearchSessions() {
       isShowingDetail={showDetail}
       searchBarPlaceholder="Search sessions..."
       onSearchTextChange={handleSearchChange}
+      onSelectionChange={handleSelectionChange}
       filtering={!isAiMode}
       navigationTitle={isAiMode ? "Search Sessions (AI)" : "Search Sessions"}
+      actions={
+        filteredEmpty ? (
+          <ActionPanel>
+            <Action
+              title="Search with AI"
+              icon={Icon.Stars}
+              onAction={handleAiSearch}
+            />
+          </ActionPanel>
+        ) : undefined
+      }
     >
-      {displaySessions.length === 0 && !isLoading && !aiLoading && searchText.length >= 3 ? (
-        <List.EmptyView
-          icon={Icon.MagnifyingGlass}
-          title="No matching sessions"
-          description="Press Enter to search with AI"
+      {displaySessions.map((session) => (
+        <List.Item
+          key={`${session.agent}-${session.id}`}
+          id={`${session.agent}-${session.id}`}
+          title={displayTitle(session)}
+          icon={{
+            source: Icon.Terminal,
+            tintColor: agentColor(session.agent),
+          }}
+          keywords={[
+            session.agent,
+            session.slug ?? "",
+            session.directory ?? "",
+            session.title,
+            session.summary ?? "",
+          ].filter(Boolean)}
+          {...sessionListItemProps(session, showDetail)}
           actions={
-            <ActionPanel>
-              <Action
-                title="Search with AI"
-                icon={Icon.Stars}
-                onAction={handleAiSearch}
-              />
-            </ActionPanel>
+            <SessionActions
+              session={session}
+              showDetail={showDetail}
+              onToggleDetail={() => setShowDetail(!showDetail)}
+              extraActions={
+                <ActionPanel.Section>
+                  <Action
+                    title="Search with AI"
+                    icon={Icon.Stars}
+                    shortcut={{ modifiers: ["cmd", "shift"], key: "a" }}
+                    onAction={handleAiSearch}
+                  />
+                </ActionPanel.Section>
+              }
+            />
           }
         />
-      ) : (
-        displaySessions.map((session) => (
-          <List.Item
-            key={`${session.agent}-${session.id}`}
-            id={`${session.agent}-${session.id}`}
-            title={displayTitle(session)}
-            icon={{
-              source: Icon.Terminal,
-              tintColor: agentColor(session.agent),
-            }}
-            keywords={[
-              session.agent,
-              session.slug ?? "",
-              session.directory ?? "",
-              session.title,
-              session.summary ?? "",
-            ].filter(Boolean)}
-            {...sessionListItemProps(session, showDetail)}
-            actions={
-              <SessionActions
-                session={session}
-                showDetail={showDetail}
-                onToggleDetail={() => setShowDetail(!showDetail)}
-                extraActions={
-                  <ActionPanel.Section>
-                    <Action
-                      title="Search with AI"
-                      icon={Icon.Stars}
-                      shortcut={{ modifiers: ["cmd", "shift"], key: "a" }}
-                      onAction={handleAiSearch}
-                    />
-                  </ActionPanel.Section>
-                }
-              />
-            }
-          />
-        ))
-      )}
+      ))}
     </List>
   );
 }

@@ -221,6 +221,19 @@ func (m *model) clampCursor() {
 
 // --- Styles ---
 
+// initRenderer sets the default lipgloss renderer to use stderr for color
+// detection. The TUI renders to stderr (stdout is reserved for the shell
+// wrapper to capture the resume command). Without this, lipgloss detects
+// color capabilities from stdout, which is a pipe inside the shell wrapper's
+// eval "$(command sesh ...)" and therefore reports no color support.
+//
+// Go initializes package-level vars in source order, so this must appear
+// before any style declarations or Render calls.
+var _initRenderer = func() struct{} {
+	lipgloss.SetDefaultRenderer(lipgloss.NewRenderer(os.Stderr))
+	return struct{}{}
+}()
+
 var (
 	promptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	countStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))

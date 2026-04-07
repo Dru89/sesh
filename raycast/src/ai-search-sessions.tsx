@@ -35,7 +35,7 @@ export default function AiSearchSessions() {
       // Run in next tick to allow loading state to render.
       setTimeout(() => {
         const sessions = aiSearchSessions(searchText);
-        setResults(sessions);
+        setResults(sessions ?? []);
         setIsLoading(false);
       }, 0);
     }, 600);

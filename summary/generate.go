@@ -5,11 +5,12 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
 
-const defaultPrompt = "Summarize what was worked on in this coding session. One sentence, under 20 words. Output only the summary, nothing else."
+const defaultPrompt = "Summarize what was worked on in this coding session. One sentence, under 20 words. Use plain text only — no markdown, no backticks, no bold markers. Output only the summary, nothing else."
 
 // Config holds the summary generation settings from the user's config file.
 type Config struct {
@@ -63,6 +64,9 @@ func (g *Generator) Generate(ctx context.Context, sessionText string) (string, e
 	if len(result) > 200 {
 		result = result[:197] + "..."
 	}
+
+	// Strip markdown artifacts that LLMs sometimes include despite instructions.
+	result = stripMarkdown(result)
 
 	return result, nil
 }
@@ -130,4 +134,26 @@ func RunLLM(ctx context.Context, command []string, env []string, input string, t
 	}
 
 	return result, nil
+}
+
+// stripMarkdown removes common markdown formatting artifacts from text.
+// LLMs sometimes emit markdown despite explicit instructions not to.
+var (
+	reBold       = regexp.MustCompile(`\*\*(.+?)\*\*`)
+	reItalic     = regexp.MustCompile(`(?:^|[^*])\*([^*]+?)\*(?:[^*]|$)`)
+	reInlineCode = regexp.MustCompile("`([^`]+)`")
+	reHeading    = regexp.MustCompile(`(?m)^#{1,6}\s+`)
+)
+
+// StripMarkdown removes common markdown formatting artifacts from text.
+func StripMarkdown(s string) string {
+	s = reBold.ReplaceAllString(s, "$1")
+	s = reItalic.ReplaceAllString(s, "$1")
+	s = reInlineCode.ReplaceAllString(s, "$1")
+	s = reHeading.ReplaceAllString(s, "")
+
+	// Strip leading list markers (-, *, •).
+	s = strings.TrimLeft(s, "-*• ")
+	s = strings.TrimSpace(s)
+	return s
 }

@@ -322,7 +322,7 @@ func main() {
 		}
 
 		pMap := providersByName(providers)
-		var out []jsonSession
+		out := make([]jsonSession, 0) // always encode as [] not null
 		for _, s := range sessions {
 			var cmd string
 			if p, ok := pMap[s.Agent]; ok {
