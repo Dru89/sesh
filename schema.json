@@ -1,0 +1,106 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/dru89/sesh/main/schema.json",
+  "title": "sesh configuration",
+  "description": "Configuration file for sesh, a unified session browser for coding agents. Place at ~/.config/sesh/config.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference (ignored by sesh)"
+    },
+    "index": {
+      "$ref": "#/$defs/commandConfig",
+      "description": "LLM command for title generation (sesh index). Also used as fallback for other subcommands."
+    },
+    "ask": {
+      "type": "object",
+      "description": "LLM commands for natural language queries (sesh ask). Uses a two-pass approach: filter then generate.",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "$ref": "#/$defs/command",
+          "description": "Command for prose answer generation (pass 2). Fallback: ask -> recap -> index."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Custom prompt for answer generation."
+        },
+        "filter_command": {
+          "$ref": "#/$defs/command",
+          "description": "Command for session filtering (pass 1). Fallback: ask.filter_command -> index -> ask -> recap. Use a fast model here."
+        }
+      }
+    },
+    "recap": {
+      "$ref": "#/$defs/commandConfig",
+      "description": "LLM command for time-range recaps (sesh recap). Fallback: recap -> ask -> index."
+    },
+    "providers": {
+      "type": "object",
+      "description": "Session providers. Built-in names (\"opencode\", \"claude\") override defaults. Any other name creates an external provider.",
+      "additionalProperties": {
+        "$ref": "#/$defs/providerConfig"
+      }
+    }
+  },
+  "$defs": {
+    "command": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "Executable and arguments. Receives input on stdin, writes output to stdout.",
+      "examples": [
+        ["llm", "-m", "haiku"],
+        ["claude", "-p"],
+        ["llm", "-m", "sonnet"]
+      ]
+    },
+    "commandConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "$ref": "#/$defs/command"
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Custom prompt to override the default."
+        }
+      }
+    },
+    "providerConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "resume_command": {
+          "oneOf": [
+            {
+              "type": "string",
+              "description": "Shell expression to resume a session. Use {{ID}} for session ID, {{DIR}} for directory.",
+              "examples": ["opencode --session {{ID}}", "ca opencode -s {{ID}}"]
+            },
+            {
+              "type": "array",
+              "items": { "type": "string" },
+              "minItems": 1,
+              "description": "Command and arguments to resume a session. Each element is individually shell-quoted.",
+              "examples": [["opencode", "--session", "{{ID}}"]]
+            }
+          ],
+          "description": "Command to resume a session. Accepts a string (raw shell expression) or an array (individually quoted arguments). Use {{ID}} for session ID, {{DIR}} for directory."
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether this provider is active. Set to false to disable a built-in provider."
+        },
+        "list_command": {
+          "$ref": "#/$defs/command",
+          "description": "Command to list sessions (external providers only). Must output a JSON array to stdout."
+        }
+      }
+    }
+  }
+}

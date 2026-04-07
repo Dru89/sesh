@@ -68,7 +68,13 @@ Both providers work automatically if the agent is installed. If the data files d
 
 ## Configuration
 
-Optional. Create `~/.config/sesh/config.json` to override resume commands or add external providers.
+Optional. Create `~/.config/sesh/config.json` to override resume commands or add external providers. Add the `$schema` field for autocomplete and validation in your editor:
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/dru89/sesh/main/schema.json"
+}
+```
 
 ### Override resume commands
 

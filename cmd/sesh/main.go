@@ -20,6 +20,7 @@ import (
 
 // config is the user configuration loaded from ~/.config/sesh/config.json.
 type config struct {
+	Schema    string                    `json:"$schema,omitempty"` // JSON Schema ref, ignored by sesh
 	Providers map[string]providerConfig `json:"providers"`
 	Index     commandConfig             `json:"index"`
 	Ask       askConfig                 `json:"ask"`
