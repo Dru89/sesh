@@ -1,0 +1,54 @@
+version: 2
+
+project_name: sesh
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: sesh
+    main: ./cmd/sesh
+    binary: sesh
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - AGENTS.md
+      - shell/*
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  github:
+    owner: dru89
+    name: sesh
+  draft: false
+  prerelease: auto

@@ -4,7 +4,9 @@ A unified session browser for coding agents. Search across OpenCode, Claude Code
 
 ## Install
 
-Requires Go 1.23+.
+Download a prebuilt binary from [GitHub Releases](https://github.com/dru89/sesh/releases) and put it on your PATH.
+
+Or install with Go (1.23+):
 
 ```bash
 go install github.com/dru89/sesh/cmd/sesh@latest
@@ -89,7 +91,7 @@ If you use a wrapper script (like `ca`) instead of calling the agent binary dire
 
 ### Add an external provider
 
-Any coding agent can integrate with sesh through the external provider protocol. You write a script that outputs JSON, register it in config, and it appears in the picker alongside the built-ins.
+Any coding agent can integrate with sesh through the external provider protocol. You write a script that outputs JSON, register it in config, and it appears in the picker alongside the built-ins. If you're setting this up from inside a coding agent, see [AGENTS.md](AGENTS.md) for instructions you can give it directly.
 
 ```json
 {

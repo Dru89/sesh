@@ -95,15 +95,50 @@ func (c config) summaryConfig() summary.Config {
 
 type providerConfig struct {
 	// ResumeCommand overrides the default resume command for a built-in provider.
+	// Accepts a string ("opencode -s {{ID}}") or an array (["opencode", "-s", "{{ID}}"]).
 	// Use {{ID}} as a placeholder for the session ID.
-	ResumeCommand string `json:"resume_command,omitempty"`
+	ResumeCommand json.RawMessage `json:"resume_command,omitempty"`
 
 	// Enabled controls whether this provider is active (default: true).
 	// Set to false to disable a built-in provider.
 	Enabled *bool `json:"enabled,omitempty"`
 
 	// ListCommand is the command to run to list sessions (external providers only).
+	// Array of executable + arguments.
 	ListCommand []string `json:"list_command,omitempty"`
+}
+
+// resumeCommandStr parses resume_command from either string or array form.
+// String form is a raw shell expression — the user handles quoting.
+// Array form is structured — sesh shell-quotes each element individually,
+// preserving argument boundaries. Template markers ({{ID}}, {{DIR}}) in
+// array elements are left unquoted since they expand to safe values.
+func (pc providerConfig) resumeCommandStr() string {
+	if len(pc.ResumeCommand) == 0 {
+		return ""
+	}
+	// Try string first — raw shell expression, pass through as-is.
+	var s string
+	if err := json.Unmarshal(pc.ResumeCommand, &s); err == nil {
+		return s
+	}
+	// Try array — shell-quote each element to preserve argument boundaries.
+	var arr []string
+	if err := json.Unmarshal(pc.ResumeCommand, &arr); err == nil && len(arr) > 0 {
+		parts := make([]string, len(arr))
+		for i, a := range arr {
+			if strings.Contains(a, "{{ID}}") || strings.Contains(a, "{{DIR}}") {
+				// Template markers expand to safe values (alphanumeric IDs,
+				// paths that get their own cd prefix). Quote the static
+				// portions around the marker.
+				parts[i] = a
+			} else {
+				parts[i] = provider.ShellQuote(a)
+			}
+		}
+		return strings.Join(parts, " ")
+	}
+	return ""
 }
 
 func (pc providerConfig) isEnabled() bool {
@@ -723,8 +758,8 @@ func buildProviders(cfg config) []provider.Provider {
 	if oc, ok := cfg.Providers["opencode"]; ok {
 		if oc.isEnabled() {
 			var opts []provider.OpenCodeOption
-			if oc.ResumeCommand != "" {
-				opts = append(opts, provider.WithOpenCodeResumeCommand(oc.ResumeCommand))
+			if cmd := oc.resumeCommandStr(); cmd != "" {
+				opts = append(opts, provider.WithOpenCodeResumeCommand(cmd))
 			}
 			providers = append(providers, provider.NewOpenCode(opts...))
 		}
@@ -736,8 +771,8 @@ func buildProviders(cfg config) []provider.Provider {
 	if cc, ok := cfg.Providers["claude"]; ok {
 		if cc.isEnabled() {
 			var opts []provider.ClaudeOption
-			if cc.ResumeCommand != "" {
-				opts = append(opts, provider.WithClaudeResumeCommand(cc.ResumeCommand))
+			if cmd := cc.resumeCommandStr(); cmd != "" {
+				opts = append(opts, provider.WithClaudeResumeCommand(cmd))
 			}
 			providers = append(providers, provider.NewClaude(opts...))
 		}
@@ -758,7 +793,7 @@ func buildProviders(cfg config) []provider.Provider {
 		providers = append(providers, provider.NewExternal(provider.ExternalConfig{
 			Name:          name,
 			ListCommand:   pc.ListCommand,
-			ResumeCommand: pc.ResumeCommand,
+			ResumeCommand: pc.resumeCommandStr(),
 		}))
 	}
 
