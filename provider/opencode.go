@@ -142,5 +142,42 @@ func (o *OpenCode) ResumeCommand(session Session) string {
 	return cmd
 }
 
+// SessionText returns concatenated user prompt text for summary generation.
+func (o *OpenCode) SessionText(ctx context.Context, sessionID string) string {
+	if _, err := os.Stat(o.dbPath); os.IsNotExist(err) {
+		return ""
+	}
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=journal_mode(WAL)&_pragma=busy_timeout(3000)", o.dbPath)
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return ""
+	}
+	defer db.Close()
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT json_extract(p.data, '$.text')
+		FROM part p
+		JOIN message m ON p.message_id = m.id
+		WHERE m.session_id = ?
+		  AND json_extract(m.data, '$.role') = 'user'
+		  AND json_extract(p.data, '$.type') = 'text'
+		ORDER BY m.time_created ASC, p.time_created ASC
+		LIMIT 10
+	`, sessionID)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+
+	var parts []string
+	for rows.Next() {
+		var text sql.NullString
+		if err := rows.Scan(&text); err == nil && text.Valid && text.String != "" {
+			parts = append(parts, text.String)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
 // Ensure OpenCode implements Provider at compile time.
 var _ Provider = (*OpenCode)(nil)

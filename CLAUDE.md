@@ -80,10 +80,28 @@ Any executable that outputs `[{"id", "title", "created", "last_used", ...}]` to 
 ## Key design decisions
 
 - **TUI renders to stderr.** The binary's stdout is reserved for the shell command output. Uses `tea.WithOutput(os.Stderr)` and `tea.WithAltScreen()`.
-- **Fuzzy search via sahilm/fuzzy.** Each session has a `SearchText` field (not exported to JSON) concatenating title, slug, directory, and first user prompts.
+- **Fuzzy search via sahilm/fuzzy.** Each session has a `SearchText` field (not exported to JSON) concatenating title, slug, directory, first user prompts, and cached summary.
 - **Pure Go SQLite.** Uses `modernc.org/sqlite` to avoid CGO. Opens the database read-only with WAL mode.
 - **Shell quoting.** `provider.ShellQuote()` handles paths with spaces and special characters (single-quote wrapping with escaped internal quotes).
 - **Provider options pattern.** Built-in providers accept functional options (e.g., `WithOpenCodeResumeCommand()`) so config overrides are injected at construction time without the provider needing to know about the config system.
+- **Summary generation is pluggable.** No built-in LLM client. The user configures any command that reads stdin and writes a summary to stdout (e.g., `llm`, `claude -p`, a local model script). This avoids credential management complexity in sesh itself.
+- **Summaries replace display titles.** `Session.DisplayTitle()` prefers `Summary` > `Title` > `Slug` > `ID`. This means sessions with ugly auto-generated titles (common in external providers) get clean display names once summarized.
+- **Providers collect sessions concurrently.** `collectSessions()` launches goroutines per provider and merges results. External provider failures log a warning and don't block other providers.
+
+## Summary system
+
+### Architecture
+
+- `summary/cache.go` — JSON-file-backed cache at `~/.cache/sesh/summaries.json`. Keyed by session ID. Staleness check: `last_used` has changed AND summary is >1 hour old (prevents re-summarizing active sessions on every run).
+- `summary/generate.go` — Shells out to user-configured command. Session text (user prompts) goes on stdin, summary comes out on stdout. 30-second per-summary timeout. Supports batch generation with progress callback.
+- `cmd/sesh/main.go` — Wires it together. `sesh index` for bulk generation. Normal `sesh` runs lazy background generation (up to 10 sessions) in a goroutine during the TUI picker.
+
+### Provider.SessionText()
+
+Each provider implements `SessionText(ctx, sessionID) string` to supply raw user prompt text for summary generation:
+- **OpenCode:** Queries first 10 user text parts from the SQLite database.
+- **Claude Code:** Reads the session transcript JSONL and extracts user message content strings.
+- **External:** Returns the `text` field from the list command response (cached in memory from the initial list call).
 
 ## Build and test
 
@@ -92,19 +110,14 @@ go build ./cmd/sesh/                    # build
 go build -o ~/go/bin/sesh ./cmd/sesh/   # build and install
 sesh --json                             # verify both providers return data
 sesh --json --agent opencode            # test single-agent filter
+sesh index                              # test summary generation (needs summary.command configured)
 ```
 
 ## Planned features (not yet implemented)
 
-These were part of the original design but deferred from v1:
+1. **AI fallback search.** When fuzzy search returns no results, fall back to a small/fast model to re-rank sessions by semantic relevance to the query. The interface should be designed so this is a pluggable search strategy, not hardcoded.
 
-1. **Haiku-generated session summaries.** Use a fast model (Haiku) to produce a one-line summary of each session's content, cached alongside the session data. The summary becomes searchable text, improving discovery for sessions whose titles are auto-generated or unhelpful (e.g., "[Pasted text #1 +195 lines]").
-
-2. **AI fallback search.** When fuzzy search returns no results, fall back to a small/fast model to re-rank sessions by semantic relevance to the query. The interface should be designed so this is a pluggable search strategy, not hardcoded.
-
-3. **Raycast extension.** The `--json` output provides the data contract. A Raycast script extension would call `sesh --json`, present results in the Raycast UI, and on selection open a terminal window running the resume command.
-
-4. **Session ID in TUI.** The picker currently shows agent, title, and time. The original spec also called for displaying a truncated session ID.
+2. **Raycast extension.** The `--json` output provides the data contract. A Raycast script extension would call `sesh --json`, present results in the Raycast UI, and on selection open a terminal window running the resume command.
 
 ## Dependencies
 

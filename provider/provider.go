@@ -12,6 +12,7 @@ type Session struct {
 	Agent      string    `json:"agent"`
 	ID         string    `json:"id"`
 	Title      string    `json:"title"`
+	Summary    string    `json:"summary,omitempty"`
 	Slug       string    `json:"slug,omitempty"`
 	Created    time.Time `json:"created"`
 	LastUsed   time.Time `json:"last_used"`
@@ -30,10 +31,19 @@ type Provider interface {
 	// ResumeCommand returns the shell command to resume a session.
 	// The returned string is eval'd by the shell wrapper, so cd + exec patterns work.
 	ResumeCommand(session Session) string
+
+	// SessionText returns the concatenated user prompt text for a session,
+	// suitable for sending to a summary generator. Returns empty string if
+	// the provider doesn't support text extraction.
+	SessionText(ctx context.Context, sessionID string) string
 }
 
 // DisplayTitle returns the best available display title for a session.
+// Prefers a generated summary over the raw title when available.
 func (s Session) DisplayTitle() string {
+	if s.Summary != "" {
+		return s.Summary
+	}
 	if s.Title != "" {
 		return s.Title
 	}

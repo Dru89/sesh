@@ -207,4 +207,67 @@ func (c *Claude) ResumeCommand(session Session) string {
 	return cmd
 }
 
+// SessionText returns concatenated user prompt text for summary generation.
+// Reads the session transcript file and extracts user message content.
+func (c *Claude) SessionText(ctx context.Context, sessionID string) string {
+	// Find the transcript file by scanning project directories.
+	projectsDir := filepath.Join(c.baseDir, "projects")
+	dirs, err := os.ReadDir(projectsDir)
+	if err != nil {
+		return ""
+	}
+
+	for _, dir := range dirs {
+		if !dir.IsDir() {
+			continue
+		}
+		path := filepath.Join(projectsDir, dir.Name(), sessionID+".jsonl")
+		if text := c.extractUserText(path); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+// extractUserText reads a session JSONL and pulls user message text.
+func (c *Claude) extractUserText(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	var prompts []string
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		var msg struct {
+			Type    string `json:"type"`
+			Message struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+			continue
+		}
+		if msg.Type != "user" || msg.Message.Role != "user" {
+			continue
+		}
+		// Content can be a string or an array of content blocks.
+		var text string
+		if err := json.Unmarshal(msg.Message.Content, &text); err == nil {
+			if text != "" && !strings.HasPrefix(text, "[") {
+				prompts = append(prompts, text)
+			}
+		}
+		// Skip tool_result arrays — they're auto-generated, not user prompts.
+
+		if len(prompts) >= 10 {
+			break
+		}
+	}
+	return strings.Join(prompts, "\n\n")
+}
+
 var _ Provider = (*Claude)(nil)

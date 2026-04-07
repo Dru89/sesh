@@ -29,11 +29,12 @@ type ExternalSession struct {
 
 // External shells out to a user-defined command to list sessions.
 type External struct {
-	config ExternalConfig
+	config    ExternalConfig
+	textCache map[string]string // session ID -> text from list response
 }
 
 func NewExternal(cfg ExternalConfig) *External {
-	return &External{config: cfg}
+	return &External{config: cfg, textCache: make(map[string]string)}
 }
 
 func (e *External) Name() string { return e.config.Name }
@@ -57,6 +58,9 @@ func (e *External) ListSessions(ctx context.Context) ([]Session, error) {
 	var sessions []Session
 	for _, r := range raw {
 		searchParts := []string{r.Title, r.Slug, r.Directory, r.Text}
+		if r.Text != "" {
+			e.textCache[r.ID] = r.Text
+		}
 		sessions = append(sessions, Session{
 			Agent:      e.config.Name,
 			ID:         r.ID,
@@ -81,6 +85,13 @@ func (e *External) ResumeCommand(session Session) string {
 		return fmt.Sprintf("cd %s && %s", ShellQuote(session.Directory), cmd)
 	}
 	return cmd
+}
+
+// SessionText returns the text field from the list response, if available.
+// External providers supply all their data via the list command, so there's
+// no secondary fetch.
+func (e *External) SessionText(_ context.Context, sessionID string) string {
+	return e.textCache[sessionID]
 }
 
 // parseFlexTime parses RFC 3339 or Unix milliseconds.

@@ -31,10 +31,13 @@ Pre-made files are in `shell/sesh.bash` and `shell/sesh.zsh` if you prefer to so
 ## Usage
 
 ```
+
 sesh                    # open the picker with all sessions
 sesh auth refactor      # pre-fill search with "auth refactor"
 sesh --agent opencode   # only show OpenCode sessions
 sesh --json             # dump all sessions as JSON (for Raycast, scripts, etc.)
+sesh index              # generate summaries for all sessions
+sesh index --agent omp  # generate summaries for one agent only
 ```
 
 In the picker: type to filter, arrow keys to navigate, enter to select, esc to cancel.
@@ -152,3 +155,50 @@ Rules:
 ```
 
 This is the integration point for Raycast extensions or other tools that want to present session data in their own UI.
+
+## Summaries
+
+sesh can generate one-line summaries for each session using any LLM you have access to. Summaries replace ugly or auto-generated titles in the picker and are included in the fuzzy search corpus.
+
+### Setup
+
+Add a `summary` section to your config. The `command` is any executable that reads session text from stdin and writes a summary to stdout:
+
+```json
+{
+  "summary": {
+    "command": ["llm", "-m", "haiku"]
+  }
+}
+```
+
+The command receives a prompt followed by the session's user messages on stdin. It should output a single line. Any command works: `llm`, `claude -p`, a script that calls a local model, etc.
+
+To override the default prompt:
+
+```json
+{
+  "summary": {
+    "command": ["llm", "-m", "haiku"],
+    "prompt": "Describe this coding session in one sentence, under 15 words."
+  }
+}
+```
+
+### Generating summaries
+
+**Bulk (recommended for first run):**
+
+```
+sesh index
+```
+
+Shows a progress line per session. Run this once to backfill, then sesh keeps up incrementally.
+
+**Lazy background generation:** During normal `sesh` usage, up to 10 unsummarized sessions are processed in the background while the picker is open. Summaries won't appear in the current invocation but will be there next time.
+
+### Cache
+
+Summaries are cached at `~/.cache/sesh/summaries.json`. A cached summary is considered stale when the session's `last_used` timestamp changes and the summary is more than an hour old. This avoids re-summarizing active sessions on every run while keeping finished sessions up to date.
+
+If summary generation fails (expired credentials, command not found, timeout), sesh logs a warning and continues with the raw title. Nothing crashes.
