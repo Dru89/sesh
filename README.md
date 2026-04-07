@@ -50,13 +50,17 @@ sesh                    # open the picker with all sessions
 sesh auth refactor      # pre-fill search with "auth refactor"
 sesh --agent opencode   # only show OpenCode sessions
 sesh --json             # dump all sessions as JSON (for Raycast, scripts, etc.)
+sesh list               # non-interactive session list
+sesh list --since monday -n 20
+sesh show ses_abc       # show details for a session (partial ID works)
+sesh stats              # session statistics across all agents
 sesh index              # generate summaries for all sessions
 sesh index --agent omp  # generate summaries for one agent only
 sesh recap --days 7     # summarize what you worked on this week
 sesh ask "What did I work on around login with claude code?"
 ```
 
-In the picker: type to filter, arrow keys to navigate, enter to select, esc to cancel.
+In the picker: type to filter, arrow keys to navigate, enter to select, tab to toggle detail pane, esc to cancel.
 
 ## Built-in providers
 

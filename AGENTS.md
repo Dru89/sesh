@@ -184,7 +184,10 @@ Each section accepts an optional `prompt` field to override the default:
 ## After setup
 
 ```bash
-sesh                          # open the fuzzy picker
+sesh                          # open the fuzzy picker (tab for detail pane)
+sesh list                     # non-interactive session list
+sesh show <session-id>        # session details (partial ID works)
+sesh stats                    # session statistics
 sesh index                    # generate titles for all sessions (run once)
 sesh ask "what did I do?"     # natural language query
 sesh recap --days 7           # weekly recap

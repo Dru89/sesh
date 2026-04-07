@@ -175,6 +175,12 @@ func main() {
 		case "list":
 			runList(os.Args[2:])
 			return
+		case "show":
+			runShow(os.Args[2:])
+			return
+		case "stats":
+			runStats(os.Args[2:])
+			return
 		}
 	}
 
@@ -186,6 +192,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Commands:\n")
 		fmt.Fprintf(os.Stderr, "  init     Output shell wrapper for your shell\n")
 		fmt.Fprintf(os.Stderr, "  list     List sessions (non-interactive)\n")
+		fmt.Fprintf(os.Stderr, "  show     Show details for a session\n")
+		fmt.Fprintf(os.Stderr, "  stats    Show session statistics\n")
 		fmt.Fprintf(os.Stderr, "  index    Generate summaries for all sessions\n")
 		fmt.Fprintf(os.Stderr, "  recap    Summarize what you worked on over a time period\n")
 		fmt.Fprintf(os.Stderr, "  ask      Ask a natural language question about your sessions\n\n")
@@ -239,13 +247,35 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Cache warming hint: if many sessions lack summaries and an LLM is configured.
+	if cfg.hasAnyCommand() {
+		unsummarized := 0
+		for _, s := range all {
+			if s.Summary == "" {
+				unsummarized++
+			}
+		}
+		if unsummarized > 20 {
+			fmt.Fprintf(os.Stderr, "sesh: %d sessions without summaries. Run 'sesh index' to generate them.\n", unsummarized)
+		}
+	}
+
 	// Kick off lazy background summary generation for unsummarized sessions.
 	if cfg.hasAnyCommand() {
 		go lazyIndex(ctx, cfg.summaryConfig(), cache, all, providers)
 	}
 
 	// Run the TUI picker.
-	pickOpts := tui.PickOptions{InitialQuery: query}
+	providerMap := providersByName(providers)
+	pickOpts := tui.PickOptions{
+		InitialQuery: query,
+		SessionText: func(agent, sessionID string) string {
+			if p, ok := providerMap[agent]; ok {
+				return p.SessionText(ctx, sessionID)
+			}
+			return ""
+		},
+	}
 	if filterCmd := cfg.askFilterCommand(); len(filterCmd) > 0 {
 		pickOpts.FallbackSearch = buildFallbackSearch(filterCmd)
 	}
@@ -261,7 +291,6 @@ func main() {
 	cache.Save()
 
 	// Find the provider and output the resume command.
-	providerMap := providersByName(providers)
 	if p, ok := providerMap[result.Session.Agent]; ok {
 		fmt.Println(p.ResumeCommand(result.Session))
 	} else {
@@ -740,6 +769,204 @@ func isTerminal() bool {
 	return fi.Mode()&os.ModeCharDevice != 0
 }
 
+// runShow handles the `sesh show` subcommand.
+func runShow(args []string) {
+	fs := flag.NewFlagSet("show", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: sesh show <session-id>\n\n")
+		fmt.Fprintf(os.Stderr, "Show details for a session. Accepts a full or partial session ID.\n")
+	}
+	fs.Parse(args)
+
+	query := fs.Arg(0)
+	if query == "" {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	cfg := loadConfig()
+	providers := buildProviders(cfg)
+	cache := summary.NewCache()
+	ctx := context.Background()
+
+	all := collectSessions(ctx, providers, "")
+	applySummaries(all, cache)
+
+	// Find session by exact or prefix match.
+	match, ambiguous := findSession(all, query)
+	if match == nil && len(ambiguous) > 1 {
+		fmt.Fprintf(os.Stderr, "Ambiguous session ID %q — matches %d sessions:\n", query, len(ambiguous))
+		for _, c := range ambiguous {
+			fmt.Fprintf(os.Stderr, "  %s  [%s]  %s\n", c.ID, c.Agent, c.DisplayTitle())
+		}
+		os.Exit(1)
+	}
+
+	if match == nil {
+		fmt.Fprintf(os.Stderr, "No session found matching %q\n", query)
+		os.Exit(1)
+	}
+
+	s := match
+	providerMap := providersByName(providers)
+
+	// Print metadata.
+	isTTY := isTerminal()
+	printField := func(label, value string) {
+		if isTTY {
+			fmt.Printf("\033[1m%-12s\033[0m %s\n", label+":", value)
+		} else {
+			fmt.Printf("%-12s %s\n", label+":", value)
+		}
+	}
+
+	printField("Agent", s.Agent)
+	printField("Session ID", s.ID)
+	if s.Slug != "" {
+		printField("Slug", s.Slug)
+	}
+	printField("Title", s.Title)
+	if s.Summary != "" {
+		printField("Summary", s.Summary)
+	}
+	if s.Directory != "" {
+		printField("Directory", s.Directory)
+	}
+	printField("Created", s.Created.Format("Mon Jan 2, 2006 3:04pm"))
+	printField("Last Used", s.LastUsed.Format("Mon Jan 2, 2006 3:04pm")+" ("+provider.RelativeTime(s.LastUsed)+")")
+
+	if p, ok := providerMap[s.Agent]; ok {
+		printField("Resume", p.ResumeCommand(*s))
+	}
+
+	// Print first messages if available.
+	if p, ok := providerMap[s.Agent]; ok {
+		text := p.SessionText(ctx, s.ID)
+		if text != "" {
+			fmt.Println()
+			if isTTY {
+				fmt.Println("\033[1mFirst messages:\033[0m")
+			} else {
+				fmt.Println("First messages:")
+			}
+			// Truncate to ~1000 chars for display.
+			if len(text) > 1000 {
+				text = text[:997] + "..."
+			}
+			fmt.Println(text)
+		}
+	}
+}
+
+// runStats handles the `sesh stats` subcommand.
+func runStats(args []string) {
+	fs := flag.NewFlagSet("stats", flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: sesh stats\n\n")
+		fmt.Fprintf(os.Stderr, "Show session statistics across all agents.\n")
+	}
+	fs.Parse(args)
+
+	cfg := loadConfig()
+	providers := buildProviders(cfg)
+	cache := summary.NewCache()
+	ctx := context.Background()
+
+	all := collectSessions(ctx, providers, "")
+	applySummaries(all, cache)
+
+	if len(all) == 0 {
+		fmt.Println("No sessions found.")
+		return
+	}
+
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].LastUsed.After(all[j].LastUsed)
+	})
+
+	stats := computeStats(all)
+
+	// Top directories sorted by count.
+	type dirEntry struct {
+		dir   string
+		count int
+	}
+	var topDirs []dirEntry
+	for d, c := range stats.DirCounts {
+		topDirs = append(topDirs, dirEntry{d, c})
+	}
+	sort.Slice(topDirs, func(i, j int) bool {
+		return topDirs[i].count > topDirs[j].count
+	})
+
+	isTTY := isTerminal()
+	heading := func(title string) {
+		if isTTY {
+			fmt.Printf("\n\033[1m%s\033[0m\n", title)
+		} else {
+			fmt.Printf("\n%s\n", title)
+		}
+	}
+
+	fmt.Printf("Total sessions: %d\n", stats.Total)
+	fmt.Printf("Summarized:     %d/%d", stats.Summarized, stats.Total)
+	if stats.Total > 0 {
+		fmt.Printf(" (%d%%)", stats.Summarized*100/stats.Total)
+	}
+	fmt.Println()
+
+	heading("By agent")
+	type agentEntry struct {
+		name  string
+		count int
+	}
+	var agents []agentEntry
+	for a, c := range stats.AgentCounts {
+		agents = append(agents, agentEntry{a, c})
+	}
+	sort.Slice(agents, func(i, j int) bool {
+		return agents[i].count > agents[j].count
+	})
+	for _, a := range agents {
+		fmt.Printf("  %-12s %d\n", a.name, a.count)
+	}
+
+	heading("By time")
+	fmt.Printf("  Today:      %d\n", stats.Today)
+	fmt.Printf("  This week:  %d\n", stats.ThisWeek)
+	fmt.Printf("  This month: %d\n", stats.ThisMonth)
+	fmt.Printf("  Oldest:     %s\n", stats.Oldest.Format("Jan 2, 2006"))
+
+	heading("Top directories")
+	limit := 5
+	if len(topDirs) < limit {
+		limit = len(topDirs)
+	}
+	for _, d := range topDirs[:limit] {
+		dir := d.dir
+		if home, err := os.UserHomeDir(); err == nil {
+			dir = strings.Replace(dir, home, "~", 1)
+		}
+		fmt.Printf("  %-50s %d sessions\n", dir, d.count)
+	}
+
+	heading("Recent")
+	recentLimit := 5
+	if len(all) < recentLimit {
+		recentLimit = len(all)
+	}
+	for _, s := range all[:recentLimit] {
+		fmt.Printf("  %-10s %-50s %s\n", s.Agent, truncate(s.DisplayTitle(), 50), provider.RelativeTime(s.LastUsed))
+	}
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-1] + "…"
+}
+
 // runInit handles the `sesh init` subcommand.
 func runInit(args []string) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
@@ -1020,6 +1247,80 @@ func providersByName(providers []provider.Provider) map[string]provider.Provider
 		m[p.Name()] = p
 	}
 	return m
+}
+
+// findSession looks up a session by exact ID or unique prefix match.
+// Returns the matched session and nil ambiguous list on success.
+// Returns nil session and the ambiguous candidates if multiple match.
+// Returns nil, nil if nothing matches.
+func findSession(sessions []provider.Session, query string) (*provider.Session, []provider.Session) {
+	// Exact match first.
+	for i := range sessions {
+		if sessions[i].ID == query {
+			return &sessions[i], nil
+		}
+	}
+	// Prefix match.
+	var candidates []provider.Session
+	for i := range sessions {
+		if len(sessions[i].ID) >= len(query) && sessions[i].ID[:len(query)] == query {
+			candidates = append(candidates, sessions[i])
+		}
+	}
+	if len(candidates) == 1 {
+		return &candidates[0], nil
+	}
+	if len(candidates) > 1 {
+		return nil, candidates
+	}
+	return nil, nil
+}
+
+// sessionStats holds computed statistics about a set of sessions.
+type sessionStats struct {
+	Total       int
+	Summarized  int
+	AgentCounts map[string]int
+	Today       int
+	ThisWeek    int
+	ThisMonth   int
+	Oldest      time.Time
+	DirCounts   map[string]int
+}
+
+// computeStats calculates statistics for a set of sessions.
+func computeStats(sessions []provider.Session) sessionStats {
+	now := time.Now()
+	stats := sessionStats{
+		Total:       len(sessions),
+		AgentCounts: make(map[string]int),
+		DirCounts:   make(map[string]int),
+	}
+
+	for _, s := range sessions {
+		stats.AgentCounts[s.Agent]++
+		if s.Summary != "" {
+			stats.Summarized++
+		}
+		if s.Directory != "" {
+			stats.DirCounts[s.Directory]++
+		}
+		d := now.Sub(s.LastUsed)
+		if d < 24*time.Hour {
+			stats.Today++
+		}
+		if d < 7*24*time.Hour {
+			stats.ThisWeek++
+		}
+		if d < 30*24*time.Hour {
+			stats.ThisMonth++
+		}
+		if stats.Oldest.IsZero() || s.LastUsed.Before(stats.Oldest) {
+			stats.Oldest = s.LastUsed
+		}
+	}
+
+	return stats
 }
 
 // buildFallbackSearch returns a function that uses the configured LLM to

@@ -23,10 +23,15 @@ type Result struct {
 	Session provider.Session
 }
 
+// SessionTextFunc returns the raw session text for a given agent and session ID.
+// Used for the detail preview pane.
+type SessionTextFunc func(agent, sessionID string) string
+
 // PickOptions configures the session picker.
 type PickOptions struct {
 	InitialQuery   string
 	FallbackSearch FallbackSearchFunc
+	SessionText    SessionTextFunc
 }
 
 // Pick launches the fzf-style TUI picker and returns the selected session.
@@ -68,6 +73,9 @@ type model struct {
 	fallbackCancel context.CancelFunc
 	searching      bool   // true while AI fallback is running
 	searchMode     string // "fuzzy" or "ai"
+	showDetail     bool   // true when detail pane is visible
+	sessionText    SessionTextFunc
+	detailCache    map[string]string // agent:id -> text
 }
 
 func newModel(sessions []provider.Session, opts PickOptions) model {
@@ -79,6 +87,8 @@ func newModel(sessions []provider.Session, opts PickOptions) model {
 		fallbackCtx:    ctx,
 		fallbackCancel: cancel,
 		searchMode:     "fuzzy",
+		sessionText:    opts.SessionText,
+		detailCache:    make(map[string]string),
 	}
 	m.filter()
 	return m
@@ -131,6 +141,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor < len(m.filtered)-1 {
 				m.cursor++
 			}
+
+		case tea.KeyTab:
+			m.showDetail = !m.showDetail
 
 		case tea.KeyBackspace, tea.KeyDelete:
 			if len(m.query) > 0 {
@@ -238,11 +251,150 @@ func renderAgent(name string) string {
 // --- View ---
 
 func (m model) View() string {
-	var b strings.Builder
 	w := m.width
 	if w == 0 {
 		w = 80
 	}
+
+	if m.showDetail && len(m.filtered) > 0 && m.cursor < len(m.filtered) {
+		return m.viewWithDetail(w)
+	}
+	return m.viewList(w, w)
+}
+
+func (m model) viewWithDetail(totalW int) string {
+	// Split: ~40% list, ~60% detail.
+	listW := totalW * 2 / 5
+	if listW < 30 {
+		listW = 30
+	}
+	detailW := totalW - listW - 3 // 3 for the separator column
+
+	listView := m.viewList(listW, totalW)
+	detailView := m.viewDetail(detailW)
+
+	// Place them side by side using a vertical separator.
+	listLines := strings.Split(listView, "\n")
+	detailLines := strings.Split(detailView, "\n")
+
+	// Pad to same height.
+	maxLines := len(listLines)
+	if len(detailLines) > maxLines {
+		maxLines = len(detailLines)
+	}
+	for len(listLines) < maxLines {
+		listLines = append(listLines, "")
+	}
+	for len(detailLines) < maxLines {
+		detailLines = append(detailLines, "")
+	}
+
+	var b strings.Builder
+	sep := dimStyle.Render(" │ ")
+	for i := 0; i < maxLines; i++ {
+		left := listLines[i]
+		// Pad left column to listW.
+		leftW := lipgloss.Width(left)
+		if leftW < listW {
+			left += strings.Repeat(" ", listW-leftW)
+		}
+		b.WriteString(left)
+		b.WriteString(sep)
+		b.WriteString(detailLines[i])
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+func (m model) viewDetail(w int) string {
+	s := m.filtered[m.cursor]
+
+	var b strings.Builder
+	labelStyle := lipgloss.NewStyle().Bold(true)
+
+	b.WriteString(labelStyle.Render("Agent:      "))
+	b.WriteString(renderAgent(s.Agent))
+	b.WriteString("\n")
+
+	b.WriteString(labelStyle.Render("Session ID: "))
+	b.WriteString(s.ID)
+	b.WriteString("\n")
+
+	if s.Slug != "" {
+		b.WriteString(labelStyle.Render("Slug:       "))
+		b.WriteString(s.Slug)
+		b.WriteString("\n")
+	}
+
+	b.WriteString(labelStyle.Render("Title:      "))
+	title := s.Title
+	if len(title) > w-12 && w > 15 {
+		title = title[:w-15] + "…"
+	}
+	b.WriteString(title)
+	b.WriteString("\n")
+
+	if s.Summary != "" && s.Summary != s.Title {
+		b.WriteString(labelStyle.Render("Summary:    "))
+		b.WriteString(s.Summary)
+		b.WriteString("\n")
+	}
+
+	if s.Directory != "" {
+		b.WriteString(labelStyle.Render("Directory:  "))
+		b.WriteString(abbreviateHome(s.Directory))
+		b.WriteString("\n")
+	}
+
+	b.WriteString(labelStyle.Render("Created:    "))
+	b.WriteString(s.Created.Format("Jan 2, 2006 3:04pm"))
+	b.WriteString("\n")
+
+	b.WriteString(labelStyle.Render("Last Used:  "))
+	b.WriteString(s.LastUsed.Format("Jan 2, 2006 3:04pm"))
+	b.WriteString(" (" + provider.RelativeTime(s.LastUsed) + ")")
+	b.WriteString("\n")
+
+	// Session text preview.
+	if m.sessionText != nil {
+		key := s.Agent + ":" + s.ID
+		text, ok := m.detailCache[key]
+		if !ok {
+			text = m.sessionText(s.Agent, s.ID)
+			// Can't mutate m.detailCache in View (it's a value receiver),
+			// but we'll just re-fetch each render. It's fast for local reads.
+		}
+		if text != "" {
+			b.WriteString("\n")
+			b.WriteString(labelStyle.Render("First messages:"))
+			b.WriteString("\n")
+			// Wrap text to detail width and cap at available height.
+			maxChars := w * (m.height - 14)
+			if maxChars < 200 {
+				maxChars = 200
+			}
+			if len(text) > maxChars {
+				text = text[:maxChars] + "…"
+			}
+			// Simple wrapping.
+			for _, line := range strings.Split(text, "\n") {
+				for len(line) > w {
+					b.WriteString(dimStyle.Render(line[:w]))
+					b.WriteString("\n")
+					line = line[w:]
+				}
+				b.WriteString(dimStyle.Render(line))
+				b.WriteString("\n")
+			}
+		}
+	}
+
+	return b.String()
+}
+
+func (m model) viewList(w int, fullW int) string {
+	var b strings.Builder
 
 	// Prompt line.
 	b.WriteString(promptStyle.Render("> "))
@@ -287,6 +439,10 @@ func (m model) View() string {
 		title := s.DisplayTitle()
 		sid := truncateID(s.ID, 10)
 		maxTitleW := w - 36
+		if m.showDetail {
+			// In split view, skip the ID to save space.
+			maxTitleW = w - 22
+		}
 		if maxTitleW < 20 {
 			maxTitleW = 20
 		}
@@ -296,7 +452,6 @@ func (m model) View() string {
 
 		// Time and ID.
 		when := timeStyle.Render(provider.RelativeTime(s.LastUsed))
-		idStr := idStyle.Render(sid)
 
 		if isSel {
 			title = selStyle.Render(title)
@@ -308,19 +463,31 @@ func (m model) View() string {
 		b.WriteString(strings.Repeat(" ", badgePad))
 		b.WriteString(title)
 
-		// Right-align time + ID.
-		suffix := when + "  " + idStr
-		usedW := 2 + len(s.Agent) + badgePad + lipgloss.Width(title)
-		gap := w - usedW - lipgloss.Width(suffix)
-		if gap < 2 {
-			gap = 2
+		if m.showDetail {
+			// Compact: just time, no ID.
+			usedW := 2 + len(s.Agent) + badgePad + lipgloss.Width(title)
+			gap := w - usedW - lipgloss.Width(when)
+			if gap < 2 {
+				gap = 2
+			}
+			b.WriteString(strings.Repeat(" ", gap))
+			b.WriteString(when)
+		} else {
+			// Full: time + ID.
+			idStr := idStyle.Render(sid)
+			suffix := when + "  " + idStr
+			usedW := 2 + len(s.Agent) + badgePad + lipgloss.Width(title)
+			gap := w - usedW - lipgloss.Width(suffix)
+			if gap < 2 {
+				gap = 2
+			}
+			b.WriteString(strings.Repeat(" ", gap))
+			b.WriteString(suffix)
 		}
-		b.WriteString(strings.Repeat(" ", gap))
-		b.WriteString(suffix)
 		b.WriteString("\n")
 
-		// Show directory for the selected row.
-		if isSel && s.Directory != "" {
+		// Show directory for the selected row (only in list-only mode).
+		if !m.showDetail && isSel && s.Directory != "" {
 			dir := abbreviateHome(s.Directory)
 			b.WriteString("  ")
 			b.WriteString(strings.Repeat(" ", 10+badgePad))
@@ -336,7 +503,8 @@ func (m model) View() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("  ↑/↓ navigate  enter select  esc quit"))
+	helpText := "  ↑/↓ navigate  enter select  tab detail  esc quit"
+	b.WriteString(helpStyle.Render(helpText))
 
 	return b.String()
 }
