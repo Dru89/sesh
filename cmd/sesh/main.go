@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -133,7 +134,7 @@ func (pc providerConfig) resumeCommandStr() string {
 				// portions around the marker.
 				parts[i] = a
 			} else {
-				parts[i] = provider.ShellQuote(a)
+				parts[i] = provider.Q(a)
 			}
 		}
 		return strings.Join(parts, " ")
@@ -733,6 +734,12 @@ func loadConfig() config {
 	}
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
 		paths = append([]string{filepath.Join(xdg, "sesh", "config.json")}, paths...)
+	}
+	// On Windows, also check %APPDATA%\sesh\config.json.
+	if runtime.GOOS == "windows" {
+		if appdata := os.Getenv("APPDATA"); appdata != "" {
+			paths = append(paths, filepath.Join(appdata, "sesh", "config.json"))
+		}
 	}
 
 	for _, p := range paths {

@@ -22,13 +22,24 @@ go build -o ~/go/bin/sesh ./cmd/sesh/
 
 ### Shell wrapper
 
-sesh outputs a shell command (cd + resume) that needs to run in your current shell. Add this to your `.bashrc` or `.zshrc`:
+sesh outputs a shell command (cd + resume) that needs to run in your current shell.
+
+**bash/zsh** — add to `.bashrc` or `.zshrc`:
 
 ```bash
 sesh() { local cmd; cmd=$(command sesh "$@") || return $?; eval "$cmd"; }
 ```
 
-Pre-made files are in `shell/sesh.bash` and `shell/sesh.zsh` if you prefer to source them.
+**PowerShell** — add to your `$PROFILE`:
+
+```powershell
+function sesh {
+    $output = & sesh.exe @args
+    if ($LASTEXITCODE -eq 0 -and $output) { Invoke-Expression $output }
+}
+```
+
+Pre-made files are in `shell/sesh.bash`, `shell/sesh.zsh`, and `shell/sesh.ps1`.
 
 ## Usage
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -30,6 +31,14 @@ func NewCache() *Cache {
 	dir := filepath.Join(home, ".cache", "sesh")
 	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
 		dir = filepath.Join(xdg, "sesh")
+	}
+	// On Windows, prefer %LOCALAPPDATA%\sesh if ~/.cache doesn't exist.
+	if runtime.GOOS == "windows" {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
+				dir = filepath.Join(localAppData, "sesh")
+			}
+		}
 	}
 	c := &Cache{
 		path:    filepath.Join(dir, "summaries.json"),

@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -76,22 +77,59 @@ func RelativeTime(t time.Time) string {
 	}
 }
 
-// ShellQuote quotes a string for safe use in shell commands.
+// ShellQuote quotes a string for safe use in POSIX shell commands (bash/zsh).
 func ShellQuote(s string) string {
 	if s == "" {
 		return "''"
 	}
-	safe := true
-	for _, c := range s {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-			(c >= '0' && c <= '9') || c == '-' || c == '_' ||
-			c == '.' || c == '/' || c == ':' || c == '~') {
-			safe = false
-			break
-		}
-	}
-	if safe {
+	if isShellSafe(s) {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+// ShellQuotePowerShell quotes a string for safe use in PowerShell.
+// PowerShell single quotes use doubled quotes for escaping: 'it”s'
+func ShellQuotePowerShell(s string) string {
+	if s == "" {
+		return "''"
+	}
+	if isShellSafe(s) && !strings.ContainsRune(s, '/') {
+		// Forward slashes are safe in POSIX but can confuse PS in some contexts.
+		// Backslash paths are fine unquoted.
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// Q quotes a string for the current platform's shell.
+func Q(s string) string {
+	if runtime.GOOS == "windows" {
+		return ShellQuotePowerShell(s)
+	}
+	return ShellQuote(s)
+}
+
+// CdAndRun returns a shell command that changes to dir and runs cmd.
+// Emits platform-appropriate syntax: "cd X && Y" on Unix,
+// "Set-Location X; Y" on Windows.
+func CdAndRun(dir, cmd string) string {
+	if dir == "" {
+		return cmd
+	}
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf("Set-Location %s; %s", Q(dir), cmd)
+	}
+	return fmt.Sprintf("cd %s && %s", Q(dir), cmd)
+}
+
+func isShellSafe(s string) bool {
+	for _, c := range s {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '-' || c == '_' ||
+			c == '.' || c == '/' || c == ':' || c == '~' || c == '\\') {
+			return false
+		}
+	}
+	return true
 }

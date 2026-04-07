@@ -81,8 +81,10 @@ func (e *External) ResumeCommand(session Session) string {
 	cmd = strings.ReplaceAll(cmd, "{{ID}}", session.ID)
 	cmd = strings.ReplaceAll(cmd, "{{DIR}}", session.Directory)
 	// Add cd prefix if the template doesn't already handle directories.
-	if session.Directory != "" && !strings.Contains(e.config.ResumeCommand, "cd ") && !strings.Contains(e.config.ResumeCommand, "{{DIR}}") {
-		return fmt.Sprintf("cd %s && %s", ShellQuote(session.Directory), cmd)
+	if !strings.Contains(e.config.ResumeCommand, "cd ") &&
+		!strings.Contains(e.config.ResumeCommand, "Set-Location") &&
+		!strings.Contains(e.config.ResumeCommand, "{{DIR}}") {
+		return CdAndRun(session.Directory, cmd)
 	}
 	return cmd
 }

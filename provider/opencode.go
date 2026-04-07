@@ -134,12 +134,9 @@ func (o *OpenCode) ResumeCommand(session Session) string {
 	if o.resumeCommand != "" {
 		cmd = strings.ReplaceAll(o.resumeCommand, "{{ID}}", session.ID)
 	} else {
-		cmd = fmt.Sprintf("opencode --session %s", ShellQuote(session.ID))
+		cmd = fmt.Sprintf("opencode --session %s", Q(session.ID))
 	}
-	if session.Directory != "" {
-		return fmt.Sprintf("cd %s && %s", ShellQuote(session.Directory), cmd)
-	}
-	return cmd
+	return CdAndRun(session.Directory, cmd)
 }
 
 // SessionText returns concatenated user prompt text for summary generation.

@@ -199,12 +199,9 @@ func (c *Claude) ResumeCommand(session Session) string {
 	if c.resumeCommand != "" {
 		cmd = strings.ReplaceAll(c.resumeCommand, "{{ID}}", session.ID)
 	} else {
-		cmd = fmt.Sprintf("claude --resume %s", ShellQuote(session.ID))
+		cmd = fmt.Sprintf("claude --resume %s", Q(session.ID))
 	}
-	if session.Directory != "" {
-		return fmt.Sprintf("cd %s && %s", ShellQuote(session.Directory), cmd)
-	}
-	return cmd
+	return CdAndRun(session.Directory, cmd)
 }
 
 // SessionText returns concatenated user prompt text for summary generation.
