@@ -57,6 +57,7 @@ brews:
   - repository:
       owner: dru89
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     name: sesh
     homepage: "https://github.com/dru89/sesh"
     description: "Unified session browser for coding agents"
