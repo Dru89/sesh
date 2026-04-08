@@ -1,4 +1,5 @@
 import { exec, execSync } from "child_process";
+import { writeFileSync } from "fs";
 import { getPreferenceValues, showToast, Toast } from "@raycast/api";
 import { SeshSession } from "./types";
 
@@ -64,6 +65,16 @@ export async function aiSearchSessions(query: string): Promise<SeshSession[]> {
         env: seshEnv(),
       },
       (err, stdout, stderr) => {
+        // Debug log to temp file.
+        try {
+          writeFileSync("/tmp/sesh-raycast-debug.log", [
+            `cmd: ${cmd}`,
+            `err: ${err?.message ?? "null"}`,
+            `stdout (${stdout?.length ?? 0} bytes): ${(stdout ?? "").slice(0, 500)}`,
+            `stderr (${stderr?.length ?? 0} bytes): ${(stderr ?? "").slice(0, 500)}`,
+          ].join("\n"));
+        } catch { /* ignore */ }
+
         if (err) {
           const msg = stderr?.trim() || err.message;
           showToast({
