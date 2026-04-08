@@ -1,0 +1,23 @@
+{
+  "index": {
+    "command": ["./fake-llm.sh"]
+  },
+  "providers": {
+    "opencode": {
+      "list_command": ["cat", "opencode.json"],
+      "resume_command": "opencode --session {{ID}}"
+    },
+    "claude": {
+      "list_command": ["cat", "claude.json"],
+      "resume_command": "claude --resume {{ID}}"
+    },
+    "pi-mono": {
+      "list_command": ["cat", "pi-mono.json"],
+      "resume_command": "pi-mono --resume {{ID}}"
+    },
+    "omp": {
+      "list_command": ["cat", "omp.json"],
+      "resume_command": "omp --resume {{ID}}"
+    }
+  }
+}

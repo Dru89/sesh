@@ -1,0 +1,16 @@
+Based on your coding agent sessions, you've been working on several authentication-related tasks across your Atlas project:
+
+## Authentication Work Summary
+
+**Multi-tenant Authentication System:**
+- **Database Migration** (Apr 6): You migrated the user table to support multi-tenant authentication, moving from a single-tenant to multi-tenant architecture
+- **Integration Testing** (Apr 6): You wrote integration tests specifically for the tenant onboarding flow, ensuring the multi-tenant auth system works end-to-end
+
+**Authentication Flow Issues:**
+- **Frontend Review** (Apr 7): You reviewed the authentication flow in atlas-web, examining how the frontend handles auth with the new multi-tenant backend
+- **Backend Debugging** (Apr 8): You debugged a flaky test in the auth handler in atlas-api, fixing reliability issues with the authentication logic
+
+**Team Knowledge Transfer:**
+- **Middleware Documentation** (Apr 8): You explained the atlas-api middleware chain to a new team member, including authentication and authorization middleware
+
+The timeline suggests you're in the middle of a significant authentication system overhaul — moving from single-tenant to multi-tenant auth, with the associated database changes, testing, debugging, and team coordination that comes with such a migration.

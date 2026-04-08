@@ -2,6 +2,8 @@
 
 A unified session browser for coding agents. Search across OpenCode, Claude Code, and any other agent with a single fuzzy picker, then resume directly into the session.
 
+![sesh picker showing sessions from multiple coding agents](screenshots/picker.png)
+
 ## Install
 
 ### Homebrew (macOS/Linux)
@@ -60,7 +62,27 @@ sesh recap --days 7     # summarize what you worked on this week
 sesh ask "What did I work on around login with claude code?"
 ```
 
+<details>
+<summary><code>sesh list</code></summary>
+
+![sesh list showing a non-interactive table of sessions](screenshots/list.png)
+</details>
+
+<details>
+<summary><code>sesh show</code></summary>
+
+![sesh show displaying session details with glamour-rendered markdown](screenshots/show.png)
+</details>
+
+<details>
+<summary><code>sesh stats</code></summary>
+
+![sesh stats showing session statistics across agents](screenshots/stats.png)
+</details>
+
 In the picker: type to filter, arrow keys to navigate, enter to select, tab to toggle detail pane, esc to cancel.
+
+![sesh detail pane showing session metadata and glamour-rendered markdown](screenshots/detail.png)
 
 ## Built-in providers
 
@@ -285,7 +307,9 @@ sesh recap --since 2026-04-01 --until 2026-04-07
 sesh recap --agent opencode   # only OpenCode sessions
 ```
 
-Output goes to stdout as plain text.
+Output goes to stdout as plain text. Use `--raw` to get the raw markdown without terminal formatting.
+
+![sesh recap showing a glamour-rendered weekly summary](screenshots/recap.png)
 
 ## AI fallback search
 
@@ -303,7 +327,9 @@ sesh ask "Show me everything related to the API gateway"
 sesh ask --agent opencode "What refactoring have I done recently?"
 ```
 
-Uses a two-pass approach: first filters sessions to the relevant subset (fast model), then generates a prose answer from just those sessions (heavy model). Output goes to stdout.
+Uses a two-pass approach: first filters sessions to the relevant subset (fast model), then generates a prose answer from just those sessions (heavy model). Output goes to stdout. Use `--raw` to get the raw markdown without terminal formatting.
+
+![sesh ask answering a natural language question about authentication work](screenshots/ask.png)
 
 ## Raycast Extension
 

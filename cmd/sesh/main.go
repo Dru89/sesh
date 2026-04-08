@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/glamour"
 	"github.com/dru89/sesh/provider"
 	"github.com/dru89/sesh/summary"
 	"github.com/dru89/sesh/tui"
@@ -560,6 +561,7 @@ func runRecap(args []string) {
 	until := fs.String("until", "", "End date (default: now)")
 	days := fs.Int("days", 0, "Number of days to look back (shorthand for --since)")
 	agentFilter := fs.String("agent", "", "Only include sessions for a specific agent")
+	raw := fs.Bool("raw", false, "Output raw markdown without formatting")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: sesh recap [options]\n\n")
 		fmt.Fprintf(os.Stderr, "Summarize what you worked on across all agent sessions.\n")
@@ -626,8 +628,7 @@ func runRecap(args []string) {
 		"Here are my coding agent sessions from %s to %s. "+
 			"Each line has the agent name, a session summary or title, the working directory, and the date.\n\n"+
 			"Write a concise recap of what I worked on during this period. "+
-			"Group related work together. Focus on what was accomplished, not the tools used. "+
-			"Use plain text, no markdown formatting.\n\n%s",
+			"Group related work together. Focus on what was accomplished, not the tools used.\n\n%s",
 		start.Format("Mon Jan 2"), end.Format("Mon Jan 2"), recapInput.String())
 
 	result, err := summary.RunLLM(ctx, recapCmd, cfg.buildEnv(recapCmdEnv), prompt, 60*time.Second)
@@ -636,6 +637,14 @@ func runRecap(args []string) {
 		os.Exit(1)
 	}
 
+	if !*raw && isTerminal() {
+		rendered, gErr := glamour.Render(result, "dark")
+		if gErr == nil {
+			fmt.Print(strings.TrimRight(rendered, "\n"))
+			fmt.Println()
+			return
+		}
+	}
 	fmt.Println(result)
 }
 
@@ -643,6 +652,7 @@ func runRecap(args []string) {
 func runAsk(args []string) {
 	fs := flag.NewFlagSet("ask", flag.ExitOnError)
 	agentFilter := fs.String("agent", "", "Only include sessions for a specific agent")
+	raw := fs.Bool("raw", false, "Output raw markdown without formatting")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: sesh ask [options] <question>\n\n")
 		fmt.Fprintf(os.Stderr, "Ask a natural language question about your coding sessions.\n")
@@ -766,8 +776,7 @@ func runAsk(args []string) {
 			"Each line has the agent name, session summary/title, working directory, and date.\n\n"+
 			"%s\n"+
 			"My question: %s\n\n"+
-			"Answer my question based on these sessions. Be specific about what was worked on. "+
-			"Use plain text, no markdown formatting.",
+			"Answer my question based on these sessions. Be specific about what was worked on.",
 		detailList.String(), question)
 
 	result, err := summary.RunLLM(ctx, askCmd, askEnv, answerPrompt, 60*time.Second)
@@ -776,6 +785,14 @@ func runAsk(args []string) {
 		os.Exit(1)
 	}
 
+	if !*raw && isTerminal() {
+		rendered, gErr := glamour.Render(result, "dark")
+		if gErr == nil {
+			fmt.Print(strings.TrimRight(rendered, "\n"))
+			fmt.Println()
+			return
+		}
+	}
 	fmt.Println(result)
 }
 
@@ -999,7 +1016,16 @@ func runShow(args []string) {
 			if len(text) > 1000 {
 				text = text[:997] + "..."
 			}
-			fmt.Println(text)
+			if isTTY {
+				rendered, err := glamour.Render(text, "dark")
+				if err == nil {
+					fmt.Print(strings.TrimRight(rendered, "\n"))
+				} else {
+					fmt.Println(text)
+				}
+			} else {
+				fmt.Println(text)
+			}
 		}
 	}
 }
@@ -1342,26 +1368,46 @@ func buildProviders(cfg config) []provider.Provider {
 	var providers []provider.Provider
 
 	// Built-in: OpenCode.
+	// If list_command is set, use it as an external provider instead.
 	if oc, ok := cfg.Providers["opencode"]; ok {
 		if oc.isEnabled() {
-			var opts []provider.OpenCodeOption
-			if cmd := oc.resumeCommandStr(); cmd != "" {
-				opts = append(opts, provider.WithOpenCodeResumeCommand(cmd))
+			if len(oc.ListCommand) > 0 {
+				providers = append(providers, provider.NewExternal(provider.ExternalConfig{
+					Name:          "opencode",
+					ListCommand:   oc.ListCommand,
+					ResumeCommand: oc.resumeCommandStr(),
+					Env:           cfg.buildEnv(oc.Env),
+				}))
+			} else {
+				var opts []provider.OpenCodeOption
+				if cmd := oc.resumeCommandStr(); cmd != "" {
+					opts = append(opts, provider.WithOpenCodeResumeCommand(cmd))
+				}
+				providers = append(providers, provider.NewOpenCode(opts...))
 			}
-			providers = append(providers, provider.NewOpenCode(opts...))
 		}
 	} else {
 		providers = append(providers, provider.NewOpenCode())
 	}
 
 	// Built-in: Claude Code.
+	// If list_command is set, use it as an external provider instead.
 	if cc, ok := cfg.Providers["claude"]; ok {
 		if cc.isEnabled() {
-			var opts []provider.ClaudeOption
-			if cmd := cc.resumeCommandStr(); cmd != "" {
-				opts = append(opts, provider.WithClaudeResumeCommand(cmd))
+			if len(cc.ListCommand) > 0 {
+				providers = append(providers, provider.NewExternal(provider.ExternalConfig{
+					Name:          "claude",
+					ListCommand:   cc.ListCommand,
+					ResumeCommand: cc.resumeCommandStr(),
+					Env:           cfg.buildEnv(cc.Env),
+				}))
+			} else {
+				var opts []provider.ClaudeOption
+				if cmd := cc.resumeCommandStr(); cmd != "" {
+					opts = append(opts, provider.WithClaudeResumeCommand(cmd))
+				}
+				providers = append(providers, provider.NewClaude(opts...))
 			}
-			providers = append(providers, provider.NewClaude(opts...))
 		}
 	} else {
 		providers = append(providers, provider.NewClaude())

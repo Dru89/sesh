@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/sahilm/fuzzy"
 
 	"github.com/dru89/sesh/provider"
@@ -137,7 +138,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Intercept keys used for list navigation and special actions.
 		// Everything else is forwarded to the textinput component.
 		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyEsc:
+		case tea.KeyCtrlC:
+			m.fallbackCancel()
+			return m, tea.Quit
+
+		case tea.KeyEsc:
+			if m.showDetail {
+				m.showDetail = false
+				return m, nil
+			}
 			m.fallbackCancel()
 			return m, tea.Quit
 
@@ -425,8 +434,15 @@ func (m model) viewDetail(w int) string {
 			if len(text) > maxChars {
 				text = text[:maxChars] + "…"
 			}
-			// Render as markdown using glamour.
-			rendered, err := glamour.Render(text, "dark")
+			// Render as markdown using glamour, word-wrapping to pane width.
+			r, err := glamour.NewTermRenderer(
+				glamour.WithStandardStyle("dark"),
+				glamour.WithWordWrap(w),
+			)
+			var rendered string
+			if err == nil {
+				rendered, err = r.Render(text)
+			}
 			if err == nil {
 				// glamour output may have trailing whitespace; trim it
 				// and cap to available height.
@@ -439,9 +455,9 @@ func (m model) viewDetail(w int) string {
 					lines = lines[:maxLines]
 				}
 				for _, line := range lines {
-					// Truncate wide lines to pane width.
+					// Truncate wide lines to pane width (ANSI-aware).
 					if lipgloss.Width(line) > w {
-						line = line[:w]
+						line = ansi.Truncate(line, w, "")
 					}
 					b.WriteString(line)
 					b.WriteString("\n")
