@@ -162,6 +162,8 @@ func normalizePath(path string) string {
 // BuildPrefixQuery constructs a query string from structured prefix values.
 // Used by CLI flags (--dir, --cwd, --agent) to set the initial search query.
 // Any existing positional query text is appended after the prefixes.
+// A trailing space is added when prefixes are present but no text follows,
+// so the cursor is ready for the user to start typing additional terms.
 func BuildPrefixQuery(dir, agent, text string) string {
 	var parts []string
 	if dir != "" {
@@ -182,12 +184,18 @@ func BuildPrefixQuery(dir, agent, text string) string {
 	if text != "" {
 		parts = append(parts, text)
 	}
-	return strings.Join(parts, " ")
+	result := strings.Join(parts, " ")
+	// Add trailing space so the cursor is positioned for typing after the prefixes.
+	if len(parts) > 0 && text == "" {
+		result += " "
+	}
+	return result
 }
 
-// ResolveDir resolves a --dir flag value to an absolute path.
-// Relative paths are resolved against the current working directory.
-// ~ is expanded to $HOME. The result is cleaned with filepath.Clean.
+// ResolveDir resolves a --dir flag value to an absolute path when it looks
+// like a filesystem path. Values starting with /, ~, or . are treated as paths
+// and resolved to absolute form. Bare words like "sesh" are left as-is for
+// fuzzy matching against directory names.
 func ResolveDir(dir string) (string, error) {
 	if dir == "" {
 		return "", nil
@@ -198,8 +206,10 @@ func ResolveDir(dir string) (string, error) {
 			dir = filepath.Join(home, dir[1:])
 		}
 	}
-	// Make absolute if relative.
-	if !filepath.IsAbs(dir) {
+	// Only resolve to absolute if it looks like a path (starts with /, ., or
+	// was just expanded from ~). Bare words like "sesh" stay as-is for fuzzy
+	// matching against directory components.
+	if strings.HasPrefix(dir, "/") || strings.HasPrefix(dir, ".") {
 		abs, err := filepath.Abs(dir)
 		if err != nil {
 			return "", err

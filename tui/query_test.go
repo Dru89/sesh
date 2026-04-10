@@ -254,13 +254,14 @@ func TestBuildPrefixQuery(t *testing.T) {
 		want  string
 	}{
 		{"empty", "", "", "", ""},
-		{"dir only", "/path/to/project", "", "", "dir:/path/to/project"},
-		{"agent only", "", "opencode", "", "agent:opencode"},
+		{"dir only", "/path/to/project", "", "", "dir:/path/to/project "},
+		{"agent only", "", "opencode", "", "agent:opencode "},
 		{"text only", "", "", "refactor", "refactor"},
 		{"dir and text", "/path/to/project", "", "refactor", "dir:/path/to/project refactor"},
 		{"all three", "/path/to/project", "opencode", "refactor", "dir:/path/to/project agent:opencode refactor"},
-		{"dir with spaces", "/path/to/my project", "", "", `dir:"/path/to/my project"`},
-		{"agent with spaces", "", "my agent", "", `agent:"my agent"`},
+		{"dir with spaces", "/path/to/my project", "", "", `dir:"/path/to/my project" `},
+		{"agent with spaces", "", "my agent", "", `agent:"my agent" `},
+		{"dir and agent no text", "/path", "opencode", "", "dir:/path agent:opencode "},
 	}
 
 	for _, tt := range tests {
@@ -357,6 +358,26 @@ func TestResolveDir(t *testing.T) {
 		}
 		if got != "/usr/local/bin" {
 			t.Errorf("got %q, want /usr/local/bin", got)
+		}
+	})
+
+	t.Run("bare word stays as-is", func(t *testing.T) {
+		got, err := ResolveDir("sesh")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != "sesh" {
+			t.Errorf("got %q, want %q", got, "sesh")
+		}
+	})
+
+	t.Run("bare word with slash stays as-is", func(t *testing.T) {
+		got, err := ResolveDir("foo/bar")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != "foo/bar" {
+			t.Errorf("got %q, want %q", got, "foo/bar")
 		}
 	})
 }
