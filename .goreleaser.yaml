@@ -53,7 +53,7 @@ release:
   draft: false
   prerelease: auto
 
-homebrew_casks:
+homebrew:
   - repository:
       owner: dru89
       name: homebrew-tap
@@ -61,10 +61,6 @@ homebrew_casks:
     name: sesh
     homepage: "https://github.com/dru89/sesh"
     description: "Unified session browser for coding agents"
-    binaries: ["sesh"]
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/sesh"]
-          end
+    directory: Formula
+    install: |
+      bin.install "sesh"
