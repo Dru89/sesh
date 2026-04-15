@@ -569,11 +569,13 @@ func runIndex(args []string) {
 	gen := summary.NewGenerator(cfg.summaryConfig())
 	succeeded := gen.GenerateBatch(ctx, items, cache, func(i, total int, id string, err error) {
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  [%d/%d] %s: error: %v\n", i, total, id, err)
-		} else {
-			fmt.Fprintf(os.Stderr, "  [%d/%d] %s: done\n", i, total, id)
+			// Clear the progress line, print error, then continue progress below.
+			fmt.Fprintf(os.Stderr, "\r\033[K\033[31m  [%d/%d] %s: %v\033[0m\n", i, total, id, err)
 		}
+		fmt.Fprintf(os.Stderr, "\r\033[K  [%d/%d] Generating summaries...", i, total)
 	})
+	// Clear the progress line.
+	fmt.Fprintf(os.Stderr, "\r\033[K")
 
 	if err := cache.Save(); err != nil {
 		fmt.Fprintf(os.Stderr, "sesh: warning: failed to save cache: %v\n", err)
