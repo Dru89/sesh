@@ -821,6 +821,52 @@ func runAsk(args []string) {
 		return
 	}
 
+	// Regenerate stale summaries before filtering so pass 1 has current titles.
+	sumCfg := cfg.summaryConfig()
+	if sumCfg.IsEnabled() {
+		providerMap := providersByName(providers)
+		var refs []summary.SessionRef
+		for _, s := range all {
+			refs = append(refs, summary.SessionRef{ID: s.ID, LastUsed: s.LastUsed})
+		}
+		stale := cache.NeedsSummary(refs)
+		if len(stale) > 0 {
+			fmt.Fprintf(os.Stderr, "Updating %d stale summaries...\n", len(stale))
+			gen := summary.NewGenerator(sumCfg)
+			var items []summary.BatchItem
+			for _, ref := range stale {
+				// Find the session to get its agent for text lookup.
+				for _, s := range all {
+					if s.ID == ref.ID {
+						if p, ok := providerMap[s.Agent]; ok {
+							text := p.SessionText(ctx, s.ID)
+							if text != "" {
+								items = append(items, summary.BatchItem{
+									ID:       s.ID,
+									LastUsed: s.LastUsed,
+									Text:     text,
+								})
+							}
+						}
+						break
+					}
+				}
+			}
+			if len(items) > 0 {
+				gen.GenerateBatch(ctx, items, cache, func(i, total int, id string, err error) {
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "\r\033[K\033[31m  [%d/%d] %s: %v\033[0m\n", i, total, id, err)
+					}
+					fmt.Fprintf(os.Stderr, "\r\033[K  [%d/%d] Updating summaries...", i, total)
+				})
+				fmt.Fprintf(os.Stderr, "\r\033[K")
+				cache.Save()
+				// Re-apply summaries so DisplayTitle() reflects the new ones.
+				applySummaries(all, cache)
+			}
+		}
+	}
+
 	// --- Pass 1: Filter — ask the LLM which sessions are relevant. ---
 
 	var numberedList strings.Builder
@@ -830,14 +876,20 @@ func runAsk(args []string) {
 			title = title[:97] + "..."
 		}
 		when := s.LastUsed.Format("Mon Jan 2 3:04pm")
-		numberedList.WriteString(fmt.Sprintf("%d. [%s] %s | %s | %s\n",
-			i+1, s.Agent, title, s.Directory, when))
+		// Include search text (first few user prompts) for additional signal.
+		search := s.SearchText
+		if len(search) > 200 {
+			search = search[:197] + "..."
+		}
+		numberedList.WriteString(fmt.Sprintf("%d. [%s] %s | %s | %s | context: %s\n",
+			i+1, s.Agent, title, s.Directory, when, search))
 	}
 
 	filterPrompt := fmt.Sprintf(
 		"I'm looking through my coding agent sessions to answer this question:\n%s\n\n"+
 			"Below is a numbered list of sessions. Each has the agent name, "+
-			"session summary/title, working directory, and date.\n\n"+
+			"session summary/title, working directory, date, and additional context "+
+			"from the first few prompts.\n\n"+
 			"%s\n"+
 			"Return ONLY the numbers of sessions relevant to my question, "+
 			"one per line, most relevant first. Return at most 20. "+
@@ -877,7 +929,7 @@ func runAsk(args []string) {
 
 	// --- Pass 2: Generate — answer the question using only the relevant sessions. ---
 
-	providerMap := providersByName(providers)
+	providerMap2 := providersByName(providers)
 
 	var detailList strings.Builder
 	for _, s := range relevant {
@@ -885,12 +937,9 @@ func runAsk(args []string) {
 		when := s.LastUsed.Format("Mon Jan 2 3:04pm")
 		resumeCmd := ""
 		var sessionText string
-		if p, ok := providerMap[s.Agent]; ok {
+		if p, ok := providerMap2[s.Agent]; ok {
 			resumeCmd = p.ResumeCommand(s)
-			sessionText = p.SessionText(ctx, s.ID)
-			if len(sessionText) > 2000 {
-				sessionText = sessionText[:1997] + "..."
-			}
+			sessionText = provider.ExcerptBookends(p.SessionText(ctx, s.ID), 5000)
 		}
 		detailList.WriteString(fmt.Sprintf("- [%s] %s | %s | %s | id: %s | resume: `%s`\n",
 			s.Agent, title, s.Directory, when, s.ID, resumeCmd))
