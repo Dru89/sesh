@@ -8,6 +8,16 @@
 # print directly.
 
 sesh() {
+  # Subcommands never emit __sesh_eval:, so run them directly to preserve
+  # TTY (glamour rendering, colors, etc.).
+  case "${1-}" in
+    index|recap|ask|init|list|show|stats|version|update)
+      command sesh "$@"
+      return $?
+      ;;
+  esac
+
+  # Root picker: capture output so we can eval resume commands.
   local out
   out=$(SESH_WRAPPER=1 command sesh "$@") || return $?
   if [[ "$out" == __sesh_eval:* ]]; then

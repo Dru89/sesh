@@ -333,51 +333,8 @@ func main() {
 	}
 	flag.Parse()
 
-	// Validate --dir, --cwd, and --repo are mutually exclusive.
-	dirFlags := 0
-	if *dirFilter != "" {
-		dirFlags++
-	}
-	if *cwdFlag {
-		dirFlags++
-	}
-	if *repoFlag {
-		dirFlags++
-	}
-	if dirFlags > 1 {
-		fmt.Fprintf(os.Stderr, "sesh: --dir, --cwd, and --repo are mutually exclusive\n")
-		os.Exit(1)
-	}
-
-	// Resolve --cwd to --dir with the current working directory.
-	if *cwdFlag {
-		cwd, err := os.Getwd()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "sesh: failed to get working directory: %v\n", err)
-			os.Exit(1)
-		}
-		*dirFilter = cwd
-	}
-
-	// Resolve --repo to --dir with the git repository root.
-	if *repoFlag {
-		root, err := tui.GitRoot()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "sesh: %v\n", err)
-			os.Exit(1)
-		}
-		*dirFilter = root
-	}
-
-	// Resolve --dir to an absolute, cleaned path.
-	if *dirFilter != "" {
-		resolved, err := tui.ResolveDir(*dirFilter)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "sesh: failed to resolve directory %q: %v\n", *dirFilter, err)
-			os.Exit(1)
-		}
-		*dirFilter = resolved
-	}
+	// Resolve directory flags.
+	*dirFilter = resolveDir(*dirFilter, *cwdFlag, *repoFlag)
 
 	// Build the initial query from flags + positional args.
 	positionalQuery := strings.Join(flag.Args(), " ")
@@ -775,6 +732,11 @@ func runRecap(args []string) {
 func runAsk(args []string) {
 	fs := flag.NewFlagSet("ask", flag.ExitOnError)
 	agentFilter := fs.String("agent", "", "Only include sessions for a specific agent")
+	dirFilter := fs.String("dir", "", "Filter by directory path (fuzzy match)")
+	cwdFlag := fs.Bool("cwd", false, "Filter to current working directory")
+	repoFlag := fs.Bool("repo", false, "Filter to the git repository root")
+	since := fs.String("since", "", "Only include sessions since date (e.g. 'monday', '2026-04-01', '3d')")
+	limit := fs.Int("n", 0, "Maximum number of sessions to consider")
 	raw := fs.Bool("raw", false, "Output raw markdown without formatting")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: sesh ask [options] <question>\n\n")
@@ -783,11 +745,16 @@ func runAsk(args []string) {
 		fmt.Fprintf(os.Stderr, "Examples:\n")
 		fmt.Fprintf(os.Stderr, "  sesh ask \"What did I work on with auth last week?\"\n")
 		fmt.Fprintf(os.Stderr, "  sesh ask \"Show me everything related to the API gateway\"\n")
-		fmt.Fprintf(os.Stderr, "  sesh ask --agent claude \"What refactoring have I done recently?\"\n\n")
+		fmt.Fprintf(os.Stderr, "  sesh ask --agent claude \"What refactoring have I done recently?\"\n")
+		fmt.Fprintf(os.Stderr, "  sesh ask --repo \"What changes have I made in this project?\"\n")
+		fmt.Fprintf(os.Stderr, "  sesh ask --since 3d \"What did I work on recently?\"\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		fs.PrintDefaults()
 	}
 	fs.Parse(args)
+
+	// Resolve directory flags.
+	*dirFilter = resolveDir(*dirFilter, *cwdFlag, *repoFlag)
 
 	question := strings.Join(fs.Args(), " ")
 	if question == "" {
@@ -824,6 +791,30 @@ func runAsk(args []string) {
 	sort.Slice(all, func(i, j int) bool {
 		return all[i].LastUsed.After(all[j].LastUsed)
 	})
+
+	// Apply structured filters (agent, dir) via the query system.
+	if *dirFilter != "" {
+		query := tui.BuildPrefixQuery(*dirFilter, "", "")
+		pq := tui.ParseQuery(query)
+		all = tui.FilterSessions(all, pq)
+	}
+
+	// Apply time filter.
+	if *since != "" {
+		cutoff := parseDateish(*since, time.Now())
+		filtered := all[:0]
+		for _, s := range all {
+			if s.LastUsed.After(cutoff) || s.LastUsed.Equal(cutoff) {
+				filtered = append(filtered, s)
+			}
+		}
+		all = filtered
+	}
+
+	// Apply limit.
+	if *limit > 0 && *limit < len(all) {
+		all = all[:*limit]
+	}
 
 	if len(all) == 0 {
 		fmt.Fprintf(os.Stderr, "No sessions found.\n")
@@ -886,20 +877,38 @@ func runAsk(args []string) {
 
 	// --- Pass 2: Generate — answer the question using only the relevant sessions. ---
 
+	providerMap := providersByName(providers)
+
 	var detailList strings.Builder
 	for _, s := range relevant {
 		title := s.DisplayTitle()
 		when := s.LastUsed.Format("Mon Jan 2 3:04pm")
-		detailList.WriteString(fmt.Sprintf("- [%s] %s | %s | %s\n",
-			s.Agent, title, s.Directory, when))
+		resumeCmd := ""
+		var sessionText string
+		if p, ok := providerMap[s.Agent]; ok {
+			resumeCmd = p.ResumeCommand(s)
+			sessionText = p.SessionText(ctx, s.ID)
+			if len(sessionText) > 2000 {
+				sessionText = sessionText[:1997] + "..."
+			}
+		}
+		detailList.WriteString(fmt.Sprintf("- [%s] %s | %s | %s | id: %s | resume: `%s`\n",
+			s.Agent, title, s.Directory, when, s.ID, resumeCmd))
+		if sessionText != "" {
+			detailList.WriteString(fmt.Sprintf("  Conversation excerpt:\n  %s\n",
+				strings.ReplaceAll(sessionText, "\n", "\n  ")))
+		}
 	}
 
 	answerPrompt := fmt.Sprintf(
 		"Here are my coding agent sessions relevant to my question. "+
-			"Each line has the agent name, session summary/title, working directory, and date.\n\n"+
+			"Each session has the agent name, session summary/title, working directory, "+
+			"date, session ID, resume command, and an excerpt from the conversation.\n\n"+
 			"%s\n"+
 			"My question: %s\n\n"+
-			"Answer my question based on these sessions. Be specific about what was worked on.",
+			"Answer my question based on these sessions. Be specific about what was worked on. "+
+			"Always include the session ID and the resume command (as a code block) "+
+			"for each session you reference, so I can easily resume it.",
 		detailList.String(), question)
 
 	result, err := summary.RunLLM(ctx, askCmd, askEnv, answerPrompt, 60*time.Second)
@@ -944,51 +953,8 @@ func runList(args []string) {
 	}
 	fs.Parse(args)
 
-	// Validate --dir, --cwd, and --repo are mutually exclusive.
-	dirFlags := 0
-	if *dirFilter != "" {
-		dirFlags++
-	}
-	if *cwdFlag {
-		dirFlags++
-	}
-	if *repoFlag {
-		dirFlags++
-	}
-	if dirFlags > 1 {
-		fmt.Fprintf(os.Stderr, "sesh: --dir, --cwd, and --repo are mutually exclusive\n")
-		os.Exit(1)
-	}
-
-	// Resolve --cwd to --dir.
-	if *cwdFlag {
-		cwd, err := os.Getwd()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "sesh: failed to get working directory: %v\n", err)
-			os.Exit(1)
-		}
-		*dirFilter = cwd
-	}
-
-	// Resolve --repo to --dir with the git repository root.
-	if *repoFlag {
-		root, err := tui.GitRoot()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "sesh: %v\n", err)
-			os.Exit(1)
-		}
-		*dirFilter = root
-	}
-
-	// Resolve --dir to an absolute, cleaned path.
-	if *dirFilter != "" {
-		resolved, err := tui.ResolveDir(*dirFilter)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "sesh: failed to resolve directory %q: %v\n", *dirFilter, err)
-			os.Exit(1)
-		}
-		*dirFilter = resolved
-	}
+	// Resolve directory flags.
+	*dirFilter = resolveDir(*dirFilter, *cwdFlag, *repoFlag)
 
 	cfg := loadConfig()
 	providers := buildProviders(cfg)
@@ -1387,6 +1353,16 @@ func detectShell() string {
 }
 
 const initBash = `sesh() {
+  # Subcommands never emit __sesh_eval:, so run them directly to preserve
+  # TTY (glamour rendering, colors, etc.).
+  case "${1-}" in
+    index|recap|ask|init|list|show|stats|version|update)
+      command sesh "$@"
+      return $?
+      ;;
+  esac
+
+  # Root picker: capture output so we can eval resume commands.
   local out
   out=$(SESH_WRAPPER=1 command sesh "$@") || return $?
   if [[ "$out" == __sesh_eval:* ]]; then
@@ -1397,6 +1373,16 @@ const initBash = `sesh() {
 }`
 
 const initZsh = `sesh() {
+  # Subcommands never emit __sesh_eval:, so run them directly to preserve
+  # TTY (glamour rendering, colors, etc.).
+  case "${1-}" in
+    index|recap|ask|init|list|show|stats|version|update)
+      command sesh "$@"
+      return $?
+      ;;
+  esac
+
+  # Root picker: capture output so we can eval resume commands.
   local out
   out=$(SESH_WRAPPER=1 command sesh "$@") || return $?
   if [[ "$out" == __sesh_eval:* ]]; then
@@ -1407,6 +1393,17 @@ const initZsh = `sesh() {
 }`
 
 const initFish = `function sesh
+    # Subcommands never emit __sesh_eval:, so run them directly to preserve
+    # TTY (glamour rendering, colors, etc.).
+    if set -q argv[1]
+        switch $argv[1]
+            case index recap ask init list show stats version update
+                command sesh $argv
+                return $status
+        end
+    end
+
+    # Root picker: capture output so we can eval resume commands.
     set -l out (SESH_WRAPPER=1 command sesh $argv)
     or return $status
     if string match -q '__sesh_eval:*' -- $out
@@ -1417,6 +1414,15 @@ const initFish = `function sesh
 end`
 
 const initPowerShell = `function sesh {
+    # Subcommands never emit __sesh_eval:, so run them directly to preserve
+    # TTY (glamour rendering, colors, etc.).
+    $passthrough = @('index','recap','ask','init','list','show','stats','version','update')
+    if ($args.Count -gt 0 -and $passthrough -contains $args[0]) {
+        & sesh.exe @args
+        return
+    }
+
+    # Root picker: capture output so we can eval resume commands.
     $env:SESH_WRAPPER = '1'
     $output = & sesh.exe @args
     Remove-Item Env:\SESH_WRAPPER
@@ -1450,6 +1456,62 @@ func parseTimeRange(since, until string, days int) (time.Time, time.Time) {
 	}
 
 	return start, end
+}
+
+// resolveDirFlags validates that --dir, --cwd, and --repo are mutually
+// exclusive, then resolves --cwd and --repo to a directory path. Returns
+// the resolved absolute directory path, or "" if no directory filter was
+// specified.
+func resolveDirFlags(dir string, cwd, repo bool) (string, error) {
+	flags := 0
+	if dir != "" {
+		flags++
+	}
+	if cwd {
+		flags++
+	}
+	if repo {
+		flags++
+	}
+	if flags > 1 {
+		return "", fmt.Errorf("--dir, --cwd, and --repo are mutually exclusive")
+	}
+
+	if cwd {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("failed to get working directory: %w", err)
+		}
+		dir = wd
+	}
+
+	if repo {
+		root, err := tui.GitRoot()
+		if err != nil {
+			return "", err
+		}
+		dir = root
+	}
+
+	if dir != "" {
+		resolved, err := tui.ResolveDir(dir)
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve directory %q: %w", dir, err)
+		}
+		dir = resolved
+	}
+
+	return dir, nil
+}
+
+// resolveDir calls resolveDirFlags and exits on error.
+func resolveDir(dir string, cwd, repo bool) string {
+	result, err := resolveDirFlags(dir, cwd, repo)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sesh: %v\n", err)
+		os.Exit(1)
+	}
+	return result
 }
 
 // parseDateish parses flexible date inputs.

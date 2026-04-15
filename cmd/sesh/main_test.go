@@ -630,6 +630,24 @@ func TestInitOutputs(t *testing.T) {
 	if !strings.Contains(initPowerShell, "sesh.exe") {
 		t.Error("initPowerShell missing sesh.exe")
 	}
+
+	// Verify subcommand passthrough: subcommands should run directly
+	// without stdout capture (so they preserve TTY for glamour, colors, etc.).
+	subcommands := []string{"index", "recap", "ask", "init", "list", "show", "stats", "version", "update"}
+	for _, sub := range subcommands {
+		if !strings.Contains(initBash, sub) {
+			t.Errorf("initBash missing subcommand passthrough for %q", sub)
+		}
+		if !strings.Contains(initZsh, sub) {
+			t.Errorf("initZsh missing subcommand passthrough for %q", sub)
+		}
+		if !strings.Contains(initFish, sub) {
+			t.Errorf("initFish missing subcommand passthrough for %q", sub)
+		}
+		if !strings.Contains(initPowerShell, sub) {
+			t.Errorf("initPowerShell missing subcommand passthrough for %q", sub)
+		}
+	}
 }
 
 // --- buildProviders tests ---
@@ -1024,4 +1042,79 @@ func writeMockScript(t *testing.T, content string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// --- resolveDirFlags tests ---
+
+func TestResolveDirFlagsNone(t *testing.T) {
+	got, err := resolveDirFlags("", false, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty string", got)
+	}
+}
+
+func TestResolveDirFlagsDirOnly(t *testing.T) {
+	dir := t.TempDir()
+	got, err := resolveDirFlags(dir, false, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Should resolve to an absolute, cleaned path.
+	if !filepath.IsAbs(got) {
+		t.Errorf("got %q, want absolute path", got)
+	}
+}
+
+func TestResolveDirFlagsCwdOnly(t *testing.T) {
+	got, err := resolveDirFlags("", true, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	cwd, _ := os.Getwd()
+	if got != cwd {
+		t.Errorf("got %q, want cwd %q", got, cwd)
+	}
+}
+
+func TestResolveDirFlagsRepoOnly(t *testing.T) {
+	// This test is running inside the sesh git repo, so --repo should work.
+	got, err := resolveDirFlags("", false, true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !filepath.IsAbs(got) {
+		t.Errorf("got %q, want absolute path", got)
+	}
+	// The resolved path should contain "sesh" somewhere (it's the repo root).
+	if !strings.Contains(got, "sesh") {
+		t.Errorf("got %q, expected it to contain 'sesh'", got)
+	}
+}
+
+func TestResolveDirFlagsMutuallyExclusive(t *testing.T) {
+	tests := []struct {
+		name string
+		dir  string
+		cwd  bool
+		repo bool
+	}{
+		{"dir+cwd", "/tmp", true, false},
+		{"dir+repo", "/tmp", false, true},
+		{"cwd+repo", "", true, true},
+		{"all three", "/tmp", true, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := resolveDirFlags(tt.dir, tt.cwd, tt.repo)
+			if err == nil {
+				t.Error("expected error for mutually exclusive flags, got nil")
+			}
+			if !strings.Contains(err.Error(), "mutually exclusive") {
+				t.Errorf("error %q should mention 'mutually exclusive'", err.Error())
+			}
+		})
+	}
 }
