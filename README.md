@@ -336,6 +336,18 @@ Uses a two-pass approach: first filters sessions to the relevant subset (fast mo
 
 ![sesh ask answering a natural language question about authentication work](screenshots/ask.png)
 
+## Agent skill
+
+sesh ships with a [skill](https://skills.sh/) that teaches coding agents (Claude Code, OpenCode, Cursor, etc.) how to search and load past sessions on your behalf. Once installed, your agent can find previous sessions by topic, pull in conversation context, and answer questions like "what did we decide about auth last week?"
+
+```bash
+npx skills add dru89/sesh -g
+```
+
+The installer will prompt you to choose which agents to configure. You can also target specific agents with `--agent claude-code opencode` or drop the `-g` flag to install at the project level instead.
+
+If you prefer to set things up manually, copy `skill/SKILL.md` into your agent's skill directory (e.g. `~/.claude/skills/sesh/SKILL.md` for Claude Code or `~/.config/opencode/skills/sesh/SKILL.md` for OpenCode).
+
 ## Raycast Extension
 
 A Raycast extension is included in the `raycast/` directory. It provides the same session browsing experience from Raycast's launcher, with configurable terminal support (Terminal.app, iTerm2, Ghostty, Warp, or custom). See [raycast/README.md](raycast/README.md) for setup instructions.
