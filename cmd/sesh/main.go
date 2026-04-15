@@ -390,7 +390,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "sesh: --ai-search requires an LLM command to be configured\n")
 				os.Exit(1)
 			}
-			sessions = aiFilterSessions(ctx, filterCmd, cfg.buildEnv(filterCmdEnv), *aiSearch, sessions)
+			sessions = aiFilterSessions(ctx, filterCmd, cfg.buildEnv(filterCmdEnv), *aiSearch, sessions, 10)
 		}
 
 		pMap := providersByName(providers)
@@ -871,56 +871,9 @@ func runAsk(args []string) {
 
 	// --- Pass 1: Filter — ask the LLM which sessions are relevant. ---
 
-	var numberedList strings.Builder
-	for i, s := range all {
-		title := s.DisplayTitle()
-		if len(title) > 100 {
-			title = title[:97] + "..."
-		}
-		when := s.LastUsed.Format("Mon Jan 2 3:04pm")
-		// Include search text (first few user prompts) for additional signal.
-		search := s.SearchText
-		if len(search) > 200 {
-			search = search[:197] + "..."
-		}
-		numberedList.WriteString(fmt.Sprintf("%d. [%s] %s | %s | %s | context: %s\n",
-			i+1, s.Agent, title, s.Directory, when, search))
-	}
-
-	filterPrompt := fmt.Sprintf(
-		"I'm looking through my coding agent sessions to answer this question:\n%s\n\n"+
-			"Below is a numbered list of sessions. Each has the agent name, "+
-			"session summary/title, working directory, date, and additional context "+
-			"from the first few prompts.\n\n"+
-			"%s\n"+
-			"Return ONLY the numbers of sessions relevant to my question, "+
-			"one per line, most relevant first. Return at most 20. "+
-			"If none are relevant, return nothing.",
-		question, numberedList.String())
-
 	fmt.Fprintf(os.Stderr, "Searching %d sessions...\n", len(all))
 
-	filterResult, err := summary.RunLLM(ctx, filterCmd, filterEnv, filterPrompt, 30*time.Second)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "sesh: ask failed during filtering: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Parse the numbered results from pass 1.
-	var relevant []provider.Session
-	for _, line := range strings.Split(filterResult, "\n") {
-		line = strings.TrimSpace(line)
-		var num int
-		if _, err := fmt.Sscanf(line, "%d", &num); err == nil {
-			idx := num - 1
-			if idx >= 0 && idx < len(all) {
-				relevant = append(relevant, all[idx])
-			}
-		}
-		if len(relevant) >= 20 {
-			break
-		}
-	}
+	relevant := aiFilterSessions(ctx, filterCmd, filterEnv, question, all, 20)
 
 	if len(relevant) == 0 {
 		fmt.Fprintf(os.Stderr, "No relevant sessions found for that question.\n")
@@ -1841,28 +1794,39 @@ func computeStats(sessions []provider.Session) sessionStats {
 // semantically search sessions when fuzzy search returns no results.
 func buildFallbackSearch(command []string, env []string) tui.FallbackSearchFunc {
 	return func(ctx context.Context, query string, sessions []provider.Session) []provider.Session {
-		return aiFilterSessions(ctx, command, env, query, sessions)
+		return aiFilterSessions(ctx, command, env, query, sessions, 10)
 	}
 }
 
 // aiFilterSessions sends a query + numbered session list to the LLM and returns
 // the sessions it identifies as relevant. Used by --ai-search, TUI fallback,
-// and the ask subcommand's pass 1.
-func aiFilterSessions(ctx context.Context, command []string, env []string, query string, sessions []provider.Session) []provider.Session {
+// and the ask subcommand's pass 1. maxResults caps the number of returned sessions.
+func aiFilterSessions(ctx context.Context, command []string, env []string, query string, sessions []provider.Session, maxResults int) []provider.Session {
 	var input strings.Builder
 	input.WriteString(fmt.Sprintf(
 		"I'm searching my coding agent sessions for: %q\n\n"+
-			"Below is a numbered list of sessions. Return ONLY the numbers of "+
-			"sessions that are relevant to my search, one per line, most relevant first. "+
-			"Return at most 10 numbers. If none are relevant, return nothing.\n\n", query))
+			"Below is a numbered list of sessions. Each has the agent name, "+
+			"session summary/title, working directory, date, and additional context "+
+			"from the first few prompts.\n\n", query))
 
 	for i, s := range sessions {
 		title := s.DisplayTitle()
 		if len(title) > 100 {
 			title = title[:97] + "..."
 		}
-		input.WriteString(fmt.Sprintf("%d. [%s] %s | %s\n", i+1, s.Agent, title, s.Directory))
+		when := s.LastUsed.Format("Mon Jan 2 3:04pm")
+		search := s.SearchText
+		if len(search) > 200 {
+			search = search[:197] + "..."
+		}
+		input.WriteString(fmt.Sprintf("%d. [%s] %s | %s | %s | context: %s\n",
+			i+1, s.Agent, title, s.Directory, when, search))
 	}
+
+	input.WriteString(fmt.Sprintf(
+		"\nReturn ONLY the numbers of sessions that are relevant to my search, "+
+			"one per line, most relevant first. "+
+			"Return at most %d numbers. If none are relevant, return nothing.\n", maxResults))
 
 	result, err := summary.RunLLM(ctx, command, env, input.String(), 30*time.Second)
 	if err != nil {
@@ -1889,7 +1853,7 @@ func aiFilterSessions(ctx context.Context, command []string, env []string, query
 				matched = append(matched, sessions[idx])
 			}
 		}
-		if len(matched) >= 10 {
+		if len(matched) >= maxResults {
 			break
 		}
 	}

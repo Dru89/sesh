@@ -840,7 +840,7 @@ func TestAiFilterSessions(t *testing.T) {
 	// Mock LLM that returns "1\n3\n" (first and third sessions).
 	script := writeMockScript(t, "#!/bin/sh\necho '1\n3'")
 
-	result := aiFilterSessions(context.Background(), []string{script}, nil, "auth", sessions)
+	result := aiFilterSessions(context.Background(), []string{script}, nil, "auth", sessions, 10)
 	if len(result) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(result))
 	}
@@ -858,7 +858,7 @@ func TestAiFilterSessionsFormats(t *testing.T) {
 	// LLM returns numbers in various formats.
 	script := writeMockScript(t, "#!/bin/sh\necho '2.\n4 - build pipeline'")
 
-	result := aiFilterSessions(context.Background(), []string{script}, nil, "tests", sessions)
+	result := aiFilterSessions(context.Background(), []string{script}, nil, "tests", sessions, 10)
 	if len(result) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(result))
 	}
@@ -876,7 +876,7 @@ func TestAiFilterSessionsNoResults(t *testing.T) {
 	// LLM returns empty output.
 	script := writeMockScript(t, "#!/bin/sh\necho ''")
 
-	result := aiFilterSessions(context.Background(), []string{script}, nil, "nothing", sessions)
+	result := aiFilterSessions(context.Background(), []string{script}, nil, "nothing", sessions, 10)
 	if len(result) != 0 {
 		t.Errorf("expected 0 results, got %d", len(result))
 	}
@@ -887,7 +887,7 @@ func TestAiFilterSessionsCommandFailure(t *testing.T) {
 
 	script := writeMockScript(t, "#!/bin/sh\nexit 1")
 
-	result := aiFilterSessions(context.Background(), []string{script}, nil, "query", sessions)
+	result := aiFilterSessions(context.Background(), []string{script}, nil, "query", sessions, 10)
 	if result != nil {
 		t.Errorf("expected nil on failure, got %d results", len(result))
 	}
@@ -906,7 +906,7 @@ func TestAiFilterSessionsMaxResults(t *testing.T) {
 	// LLM returns all 20.
 	script := writeMockScript(t, "#!/bin/sh\nseq 1 20")
 
-	result := aiFilterSessions(context.Background(), []string{script}, nil, "all", sessions)
+	result := aiFilterSessions(context.Background(), []string{script}, nil, "all", sessions, 10)
 	if len(result) != 10 {
 		t.Errorf("expected max 10 results, got %d", len(result))
 	}
