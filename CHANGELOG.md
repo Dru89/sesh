@@ -1,0 +1,108 @@
+# Changelog
+
+## [Unreleased]
+
+- Add 30-second timeout for provider list commands to prevent hung external scripts from blocking sesh
+- Replace lipgloss pseudo-version with tagged v1.1.0 (downgrade glamour to v0.9.1)
+- Add SHA256 checksum verification when downloading updates via `sesh update`
+- Update CI workflows to Go 1.25
+- Include LICENSE in release archives
+
+## [0.12.0] - 2026-04-15
+
+- Add `--dir`, `--cwd`, `--repo`, `--since`, and `-n` flags to `sesh ask`
+- Include session IDs, resume commands, and conversation excerpts in `sesh ask` answers
+- Fix glamour rendering for all subcommands — shell wrapper now passes subcommands through directly instead of capturing stdout
+- Extract shared `resolveDirFlags` helper to deduplicate flag validation
+
+## [0.11.4] - 2026-04-13
+
+- Add `--since` and `-n` flags to the root picker command
+- Filter out subagent/child sessions from OpenCode provider
+- Fix fuzzy filter sort order
+
+## [0.11.0] - 2026-04-10
+
+- Add `--repo` flag to filter sessions by git repository root
+
+## [0.10.0] - 2026-04-10
+
+- Add directory and agent search filters (`dir:` and `agent:` prefixes in the picker, `--dir` and `--cwd` flags)
+- Include assistant responses in session text output
+- Add agent skill file for coding agents to find and load past sessions
+- Show git commit SHA in `sesh version`
+
+## [0.9.3] - 2026-04-08
+
+- Add glamour-rendered markdown output for `ask`, `recap`, `show`, and the detail pane
+- Use deterministic hashed colors for agent badges (agents always get the same color)
+- Fix shell wrapper eval'ing non-command output (e.g. `sesh version`)
+- Fix summary prompt to produce short titles; add `sesh index --clear`
+- Add MIT license and screenshots to README
+
+## [0.8.0] - 2026-04-07
+
+- Fix Raycast AI search: async execution, loading indicators, error toasts
+- Fix cache warming to exclude sessions with no searchable text
+
+## [0.7.0] - 2026-04-07
+
+- Add `env` config for setting environment variables on LLM commands (top-level and per-command)
+
+## [0.6.0] - 2026-04-07
+
+- Add `sesh update` for self-updating (with Homebrew detection)
+- Add `sesh version`
+- Add background update check with 24-hour cache
+- Add Homebrew tap via GoReleaser
+
+## [0.5.0] - 2026-04-07
+
+- Add `--ai-search` flag for LLM-ranked search in JSON mode
+- Add Raycast AI search command
+
+## [0.4.0] - 2026-04-07
+
+- Add `sesh show` for session details (with partial ID matching)
+- Add `sesh stats` for session statistics
+- Add TUI detail pane (Tab to toggle)
+- Add lazy background summary generation while picker is open
+
+## [0.3.0] - 2026-04-07
+
+- Add `sesh list` for non-interactive session listing
+- Add `sesh init` for shell wrapper setup (bash, zsh, fish, PowerShell)
+- Add Raycast extension for session browsing
+- Add JSON Schema for config validation
+- Add test suite and CI workflow
+
+## [0.2.0] - 2026-04-07
+
+- Add Windows support (PowerShell wrapper, zip archives)
+
+## [0.1.0] - 2026-04-07
+
+Initial release.
+
+- Fuzzy session picker with OpenCode and Claude Code providers
+- External provider protocol for custom agents
+- `sesh ask` for natural language session queries (two-pass LLM)
+- `sesh recap` for time-range session summaries
+- `sesh index` for bulk summary generation
+- LLM fallback chains across subcommands
+- Shell wrapper for in-shell session resumption
+
+[Unreleased]: https://github.com/dru89/sesh/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/dru89/sesh/compare/v0.11.4...v0.12.0
+[0.11.4]: https://github.com/dru89/sesh/compare/v0.11.0...v0.11.4
+[0.11.0]: https://github.com/dru89/sesh/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/dru89/sesh/compare/v0.9.3...v0.10.0
+[0.9.3]: https://github.com/dru89/sesh/compare/v0.8.0...v0.9.3
+[0.8.0]: https://github.com/dru89/sesh/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/dru89/sesh/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/dru89/sesh/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/dru89/sesh/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/dru89/sesh/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/dru89/sesh/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/dru89/sesh/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/dru89/sesh/releases/tag/v0.1.0

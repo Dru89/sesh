@@ -1561,6 +1561,8 @@ func parseDateish(s string, now time.Time) time.Time {
 }
 
 // collectSessions gathers sessions from all providers, with warnings on failure.
+// Each provider gets a 30-second timeout to prevent hung external scripts from
+// blocking sesh indefinitely.
 func collectSessions(ctx context.Context, providers []provider.Provider, agentFilter string) []provider.Session {
 	var (
 		mu  sync.Mutex
@@ -1574,7 +1576,9 @@ func collectSessions(ctx context.Context, providers []provider.Provider, agentFi
 		wg.Add(1)
 		go func(p provider.Provider) {
 			defer wg.Done()
-			sessions, err := p.ListSessions(ctx)
+			pctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			sessions, err := p.ListSessions(pctx)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "sesh: warning: %s: %v\n", p.Name(), err)
 				return
@@ -1877,7 +1881,7 @@ func runUpdate() {
 	}
 
 	fmt.Fprintf(os.Stderr, "Downloading v%s...\n", latest)
-	if err := update.DownloadAndReplace(url); err != nil {
+	if err := update.DownloadAndReplace(release, url); err != nil {
 		fmt.Fprintf(os.Stderr, "sesh: update failed: %v\n", err)
 		fmt.Fprintf(os.Stderr, "Download manually: %s\n", release.HTMLURL)
 		os.Exit(1)

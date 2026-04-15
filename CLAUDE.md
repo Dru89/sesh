@@ -15,6 +15,34 @@ When making changes to sesh, always:
 5. **Update schema.json** if config fields are added or modified.
 6. **Run the CI check locally** (`go test ./... && go build ./cmd/sesh/`) before pushing.
 
+## Commit conventions
+
+Use [Conventional Commits](https://www.conventionalcommits.org/) for all commit messages:
+
+```
+feat: add --repo flag to sesh ask
+fix: prevent hang when external provider script blocks
+refactor: extract resolveDirFlags helper
+docs: update README with new Go version requirement
+test: add checksum verification tests
+chore: update CI to Go 1.25
+```
+
+Common types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`. Include a scope in parentheses when it clarifies the change: `feat(ask):`, `fix(update):`, `ci(release):`.
+
+Breaking changes get a `!` suffix: `feat!: change config format`.
+
+## Release process
+
+Releases are triggered by pushing a version tag. The process:
+
+1. **Update CHANGELOG.md** — Move items from `[Unreleased]` to a new version section. Add the date. Update the comparison links at the bottom of the file.
+2. **Commit** — `git commit -am "chore: prepare release v0.13.0"`
+3. **Tag and push** — `git tag v0.13.0 && git push origin main --tags`
+4. GoReleaser builds cross-platform binaries, publishes to GitHub Releases, and updates the Homebrew cask.
+
+When updating the changelog at release time, review `git log` since the last tag and write concise, user-facing descriptions. Group related changes. The auto-generated GoReleaser changelog covers commit-level detail on the GitHub release page; the CHANGELOG.md is the curated version.
+
 ## Project structure
 
 ```

@@ -1,7 +1,12 @@
 package update
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -154,4 +159,115 @@ func containsHelper(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// --- verifyChecksum tests ---
+
+func TestVerifyChecksumValid(t *testing.T) {
+	// Create a fake archive file.
+	content := []byte("fake archive content for testing")
+	archivePath := filepath.Join(t.TempDir(), "sesh_1.0.0_darwin_arm64.tar.gz")
+	if err := os.WriteFile(archivePath, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Compute its SHA256.
+	h := sha256.Sum256(content)
+	hash := hex.EncodeToString(h[:])
+
+	// Serve a checksums.txt with the correct hash.
+	checksums := fmt.Sprintf("%s  sesh_1.0.0_darwin_arm64.tar.gz\n%s  sesh_1.0.0_linux_amd64.tar.gz\n",
+		hash, "aaaa")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(checksums))
+	}))
+	defer srv.Close()
+
+	release := &Release{
+		Assets: []Asset{
+			{Name: "checksums.txt", BrowserDownloadURL: srv.URL + "/checksums.txt"},
+		},
+	}
+
+	err := verifyChecksum(release, archivePath, "sesh_1.0.0_darwin_arm64.tar.gz")
+	if err != nil {
+		t.Errorf("expected valid checksum, got error: %v", err)
+	}
+}
+
+func TestVerifyChecksumMismatch(t *testing.T) {
+	content := []byte("fake archive content")
+	archivePath := filepath.Join(t.TempDir(), "sesh_1.0.0_darwin_arm64.tar.gz")
+	if err := os.WriteFile(archivePath, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Serve a checksums.txt with a wrong hash.
+	checksums := "deadbeef00000000000000000000000000000000000000000000000000000000  sesh_1.0.0_darwin_arm64.tar.gz\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(checksums))
+	}))
+	defer srv.Close()
+
+	release := &Release{
+		Assets: []Asset{
+			{Name: "checksums.txt", BrowserDownloadURL: srv.URL + "/checksums.txt"},
+		},
+	}
+
+	err := verifyChecksum(release, archivePath, "sesh_1.0.0_darwin_arm64.tar.gz")
+	if err == nil {
+		t.Error("expected checksum mismatch error, got nil")
+	}
+	if err != nil && !containsStr(err.Error(), "checksum mismatch") {
+		t.Errorf("expected 'checksum mismatch' in error, got: %v", err)
+	}
+}
+
+func TestVerifyChecksumNoChecksumsAsset(t *testing.T) {
+	// Release has no checksums.txt — verification should be skipped.
+	release := &Release{
+		Assets: []Asset{
+			{Name: "sesh_1.0.0_darwin_arm64.tar.gz", BrowserDownloadURL: "https://example.com/archive"},
+		},
+	}
+
+	err := verifyChecksum(release, "/nonexistent", "sesh_1.0.0_darwin_arm64.tar.gz")
+	if err != nil {
+		t.Errorf("expected nil (skip verification), got: %v", err)
+	}
+}
+
+func TestVerifyChecksumArchiveNotInChecksums(t *testing.T) {
+	// checksums.txt exists but doesn't contain our archive name.
+	checksums := "abcdef1234567890  sesh_1.0.0_linux_amd64.tar.gz\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(checksums))
+	}))
+	defer srv.Close()
+
+	release := &Release{
+		Assets: []Asset{
+			{Name: "checksums.txt", BrowserDownloadURL: srv.URL + "/checksums.txt"},
+		},
+	}
+
+	err := verifyChecksum(release, "/nonexistent", "sesh_1.0.0_darwin_arm64.tar.gz")
+	if err == nil {
+		t.Error("expected error for missing archive in checksums, got nil")
+	}
+	if err != nil && !containsStr(err.Error(), "not found in checksums.txt") {
+		t.Errorf("expected 'not found in checksums.txt' in error, got: %v", err)
+	}
+}
+
+func containsStr(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(s) > 0 && func() bool {
+		for i := 0; i <= len(s)-len(sub); i++ {
+			if s[i:i+len(sub)] == sub {
+				return true
+			}
+		}
+		return false
+	}())
 }

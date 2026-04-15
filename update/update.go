@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -126,12 +128,13 @@ func FindAsset(release *Release) (string, error) {
 	return "", fmt.Errorf("no release asset found for %s/%s (looking for %s)", runtime.GOOS, runtime.GOARCH, want)
 }
 
-// DownloadAndReplace downloads the release archive, extracts the binary,
-// and replaces the currently running binary.
-func DownloadAndReplace(url string) error {
-	// Download the archive.
+// DownloadAndReplace downloads the release archive, verifies its checksum
+// against the release's checksums.txt, extracts the binary, and replaces
+// the currently running binary.
+func DownloadAndReplace(release *Release, archiveURL string) error {
+	// Download the archive to a temp file so we can compute its hash.
 	client := &http.Client{Timeout: 120 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := client.Get(archiveURL)
 	if err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
@@ -139,6 +142,28 @@ func DownloadAndReplace(url string) error {
 
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("download returned %d", resp.StatusCode)
+	}
+
+	archiveTmp, err := os.CreateTemp("", "sesh-download-*")
+	if err != nil {
+		return fmt.Errorf("create temp: %w", err)
+	}
+	defer os.Remove(archiveTmp.Name())
+	defer archiveTmp.Close()
+
+	if _, err := io.Copy(archiveTmp, resp.Body); err != nil {
+		return fmt.Errorf("download to temp: %w", err)
+	}
+
+	// Verify checksum against the release's checksums.txt.
+	archiveName := filepath.Base(archiveURL)
+	if err := verifyChecksum(release, archiveTmp.Name(), archiveName); err != nil {
+		return err
+	}
+
+	// Seek back to the start for extraction.
+	if _, err := archiveTmp.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("seek archive: %w", err)
 	}
 
 	// Determine current binary path.
@@ -153,10 +178,10 @@ func DownloadAndReplace(url string) error {
 
 	// Extract the sesh binary from the archive.
 	var binaryData []byte
-	if strings.HasSuffix(url, ".zip") {
-		binaryData, err = extractFromZip(resp.Body)
+	if strings.HasSuffix(archiveURL, ".zip") {
+		binaryData, err = extractFromZip(archiveTmp)
 	} else {
-		binaryData, err = extractFromTarGz(resp.Body)
+		binaryData, err = extractFromTarGz(archiveTmp)
 	}
 	if err != nil {
 		return err
@@ -191,6 +216,73 @@ func DownloadAndReplace(url string) error {
 	return nil
 }
 
+// verifyChecksum downloads the checksums.txt from the release and verifies
+// the archive's SHA256 hash matches the expected value.
+func verifyChecksum(release *Release, archivePath, archiveName string) error {
+	// Find the checksums asset.
+	var checksumsURL string
+	for _, a := range release.Assets {
+		if a.Name == "checksums.txt" {
+			checksumsURL = a.BrowserDownloadURL
+			break
+		}
+	}
+	if checksumsURL == "" {
+		// No checksums.txt in the release — skip verification.
+		// This can happen for dev releases or older releases.
+		return nil
+	}
+
+	// Download checksums.txt.
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(checksumsURL)
+	if err != nil {
+		return fmt.Errorf("download checksums: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("checksums download returned %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read checksums: %w", err)
+	}
+
+	// Parse checksums.txt — format is "<sha256>  <filename>" per line.
+	var expectedHash string
+	for _, line := range strings.Split(string(body), "\n") {
+		parts := strings.Fields(line)
+		if len(parts) == 2 && parts[1] == archiveName {
+			expectedHash = parts[0]
+			break
+		}
+	}
+	if expectedHash == "" {
+		return fmt.Errorf("checksum for %s not found in checksums.txt", archiveName)
+	}
+
+	// Compute the SHA256 of the downloaded archive.
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return fmt.Errorf("open archive for checksum: %w", err)
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("hash archive: %w", err)
+	}
+	actualHash := hex.EncodeToString(h.Sum(nil))
+
+	if actualHash != expectedHash {
+		return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedHash, actualHash)
+	}
+
+	return nil
+}
+
 func extractFromTarGz(r io.Reader) ([]byte, error) {
 	gz, err := gzip.NewReader(r)
 	if err != nil {
@@ -219,33 +311,21 @@ func extractFromTarGz(r io.Reader) ([]byte, error) {
 	return nil, fmt.Errorf("sesh binary not found in archive")
 }
 
-func extractFromZip(r io.Reader) ([]byte, error) {
-	// zip needs random access, so buffer to a temp file.
-	tmp, err := os.CreateTemp("", "sesh-download-*.zip")
-	if err != nil {
-		return nil, fmt.Errorf("create temp: %w", err)
-	}
-	defer os.Remove(tmp.Name())
-	defer tmp.Close()
-
-	if _, err := io.Copy(tmp, r); err != nil {
-		return nil, fmt.Errorf("download to temp: %w", err)
-	}
-
-	stat, err := tmp.Stat()
+func extractFromZip(f *os.File) ([]byte, error) {
+	stat, err := f.Stat()
 	if err != nil {
 		return nil, err
 	}
 
-	zr, err := zip.NewReader(tmp, stat.Size())
+	zr, err := zip.NewReader(f, stat.Size())
 	if err != nil {
 		return nil, fmt.Errorf("open zip: %w", err)
 	}
 
-	for _, f := range zr.File {
-		name := filepath.Base(f.Name)
+	for _, zf := range zr.File {
+		name := filepath.Base(zf.Name)
 		if name == "sesh" || name == "sesh.exe" {
-			rc, err := f.Open()
+			rc, err := zf.Open()
 			if err != nil {
 				return nil, err
 			}

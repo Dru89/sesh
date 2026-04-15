@@ -14,7 +14,7 @@ brew install --cask dru89/tap/sesh
 
 ### Other methods
 
-Download a prebuilt binary from [GitHub Releases](https://github.com/dru89/sesh/releases), or install with Go (1.23+):
+Download a prebuilt binary from [GitHub Releases](https://github.com/dru89/sesh/releases), or install with Go (1.25+):
 
 ```bash
 go install github.com/dru89/sesh/cmd/sesh@latest
