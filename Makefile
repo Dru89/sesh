@@ -1,4 +1,4 @@
-.PHONY: build install install-skill test vet clean release release-dry
+.PHONY: build install test vet clean release release-dry
 
 # Build the binary into ./sesh with commit SHA embedded.
 build:
@@ -7,13 +7,6 @@ build:
 # Install to $GOPATH/bin (commit SHA embedded automatically via runtime/debug).
 install:
 	go install ./cmd/sesh
-
-# Install the OpenCode skill to ~/.config/opencode/skills/sesh/.
-# Creates a symlink so edits to skill/SKILL.md in the repo take effect immediately.
-install-skill:
-	@mkdir -p ~/.config/opencode/skills/sesh
-	@ln -sf "$(CURDIR)/skill/SKILL.md" ~/.config/opencode/skills/sesh/SKILL.md
-	@echo "Installed sesh skill → ~/.config/opencode/skills/sesh/SKILL.md"
 
 # Run all tests.
 test:
