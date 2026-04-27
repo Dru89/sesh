@@ -134,10 +134,17 @@ func isShellSafe(s string) bool {
 	return true
 }
 
+// DefaultExcerptPerEnd is the default number of characters taken from each end
+// of a session transcript for excerpting. Used by both title generation and
+// ask answer generation.
+const DefaultExcerptPerEnd = 5000
+
 // ExcerptBookends returns a message-boundary-aware excerpt of session text,
 // taking approximately maxPerEnd characters from the beginning and end of
 // the conversation. Splits are made at message boundaries (delimited by
 // "\n\n" with "User: " or "Assistant: " prefixes) to avoid cutting mid-message.
+// When a single message exceeds the budget, it is truncated at the best
+// available boundary (sentence, newline, or word) rather than skipped.
 // If the full text fits within 2*maxPerEnd, it is returned as-is.
 func ExcerptBookends(text string, maxPerEnd int) string {
 	if len(text) <= maxPerEnd*2 {
@@ -150,7 +157,7 @@ func ExcerptBookends(text string, maxPerEnd int) string {
 	if len(chunks) <= 2 {
 		// Single or two messages — just truncate.
 		if len(text) > maxPerEnd*2 {
-			return text[:maxPerEnd*2-3] + "..."
+			return truncateHead(text, maxPerEnd*2)
 		}
 		return text
 	}
@@ -164,6 +171,12 @@ func ExcerptBookends(text string, maxPerEnd int) string {
 			nextLen += 2 // account for the "\n\n" separator
 		}
 		if headLen > 0 && nextLen > maxPerEnd {
+			// This chunk would push us over. Truncate it to fill the
+			// remaining budget rather than skipping it entirely.
+			remaining := maxPerEnd - headLen - 2
+			if remaining > 0 {
+				headChunks = append(headChunks, truncateHead(chunk, remaining))
+			}
 			break
 		}
 		headChunks = append(headChunks, chunk)
@@ -179,6 +192,10 @@ func ExcerptBookends(text string, maxPerEnd int) string {
 			nextLen += 2
 		}
 		if tailLen > 0 && nextLen > maxPerEnd {
+			remaining := maxPerEnd - tailLen - 2
+			if remaining > 0 {
+				tailChunks = append(tailChunks, truncateTail(chunks[i], remaining))
+			}
 			break
 		}
 		tailChunks = append(tailChunks, chunks[i])
@@ -190,13 +207,78 @@ func ExcerptBookends(text string, maxPerEnd int) string {
 		tailChunks[i], tailChunks[j] = tailChunks[j], tailChunks[i]
 	}
 
-	// Check for overlap: if head and tail cover the whole text, just return it.
-	if len(headChunks)+len(tailChunks) >= len(chunks) {
-		return text
-	}
-
 	head := strings.Join(headChunks, "\n\n")
 	tail := strings.Join(tailChunks, "\n\n")
 
+	// If the excerpted parts are as large as the original, just return it.
+	if len(head)+len(tail)+len("\n\n[...]\n\n") >= len(text) {
+		return text
+	}
+
 	return head + "\n\n[...]\n\n" + tail
+}
+
+// truncateHead truncates text to approximately max characters, keeping the
+// beginning. Tries to break at a sentence boundary, then a newline, then a
+// word boundary, to avoid cutting mid-thought.
+func truncateHead(text string, max int) string {
+	if len(text) <= max {
+		return text
+	}
+
+	// Search backward from the limit for a clean break point.
+	region := text[:max]
+
+	// Prefer sentence boundary: ". " or ".\n"
+	if i := strings.LastIndex(region, ". "); i > max/2 {
+		return text[:i+1]
+	}
+	if i := strings.LastIndex(region, ".\n"); i > max/2 {
+		return text[:i+1]
+	}
+
+	// Fall back to newline.
+	if i := strings.LastIndex(region, "\n"); i > max/2 {
+		return text[:i]
+	}
+
+	// Fall back to word boundary.
+	if i := strings.LastIndex(region, " "); i > max/2 {
+		return text[:i]
+	}
+
+	// No good break point — hard truncate.
+	return region + "..."
+}
+
+// truncateTail truncates text to approximately max characters, keeping the
+// end. Mirrors truncateHead but searches forward from the cut point.
+func truncateTail(text string, max int) string {
+	if len(text) <= max {
+		return text
+	}
+
+	cutPoint := len(text) - max
+	region := text[cutPoint:]
+
+	// Prefer sentence boundary: ". " after the cut point.
+	if i := strings.Index(region, ". "); i >= 0 && i < max/2 {
+		return text[cutPoint+i+2:]
+	}
+	if i := strings.Index(region, ".\n"); i >= 0 && i < max/2 {
+		return text[cutPoint+i+2:]
+	}
+
+	// Fall back to newline.
+	if i := strings.Index(region, "\n"); i >= 0 && i < max/2 {
+		return text[cutPoint+i+1:]
+	}
+
+	// Fall back to word boundary.
+	if i := strings.Index(region, " "); i >= 0 && i < max/2 {
+		return text[cutPoint+i+1:]
+	}
+
+	// No good break point — hard truncate.
+	return "..." + region
 }

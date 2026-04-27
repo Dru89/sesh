@@ -28,7 +28,7 @@ const defaultSystemPrompt = "You are a session indexing assistant for coding age
 // transcript for title generation. ExcerptBookends takes this many chars from
 // the beginning and end, giving coverage of both how the session started and
 // how it concluded without blowing up prefill time on constrained hardware.
-const maxSummaryTextPerEnd = 3000
+const maxSummaryTextPerEnd = provider.DefaultExcerptPerEnd
 
 // Config holds the summary generation settings from the user's config file.
 type Config struct {

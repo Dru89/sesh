@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-04-27
+
+- Fix `ExcerptBookends` skipping oversized message chunks — sessions with a large early assistant response (e.g. 33K chars) would produce excerpts containing only the tiny first user message, leading to poor or wrong summaries
+- Truncate oversized chunks at sentence, newline, or word boundaries instead of hard substring cuts
+- Unify excerpt size to 5000 chars per end across both title generation and ask answer generation (was 3000/5000)
+
 ## [1.1.0] - 2026-04-27
 
 - Add `system_prompt` config field for role-framing LLM calls — prevents models from "responding to" session transcripts instead of summarizing them
@@ -119,7 +125,8 @@ Initial release.
 - LLM fallback chains across subcommands
 - Shell wrapper for in-shell session resumption
 
-[Unreleased]: https://github.com/dru89/sesh/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/dru89/sesh/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/dru89/sesh/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/dru89/sesh/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/dru89/sesh/compare/v0.13.0...v1.0.0
 [0.13.0]: https://github.com/dru89/sesh/compare/v0.12.0...v0.13.0

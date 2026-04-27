@@ -945,7 +945,7 @@ func runAsk(args []string) {
 		relWhen := provider.RelativeTime(s.LastUsed)
 		var sessionText string
 		if p, ok := providerMap2[s.Agent]; ok {
-			sessionText = provider.ExcerptBookends(p.SessionText(ctx, s.ID), 5000)
+			sessionText = provider.ExcerptBookends(p.SessionText(ctx, s.ID), provider.DefaultExcerptPerEnd)
 		}
 		detailList.WriteString(fmt.Sprintf("- [%s] %s | %s | %s (%s) | id: %s | resume: `sesh resume %s`\n",
 			s.Agent, title, s.Directory, when, relWhen, s.ID, s.ID))

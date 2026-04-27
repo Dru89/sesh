@@ -232,16 +232,16 @@ func TestExcerptBookendsSplitsAtMessageBoundary(t *testing.T) {
 		t.Fatalf("expected 2 parts around [...], got %d", len(parts))
 	}
 
-	headMessages := strings.Split(parts[0], "\n\n")
-	lastHead := headMessages[len(headMessages)-1]
-	if !strings.HasPrefix(lastHead, "User: ") && !strings.HasPrefix(lastHead, "Assistant: ") {
-		t.Errorf("head should end at a message boundary, last chunk: %q", lastHead)
+	// The head should contain complete messages from the start. The last
+	// chunk may be a truncated fragment from an oversized message — that's
+	// expected when a message exceeds the remaining budget.
+	if !strings.HasPrefix(parts[0], "User: First message") {
+		t.Errorf("head should start with the first message, got:\n%s", parts[0])
 	}
 
-	tailMessages := strings.Split(parts[1], "\n\n")
-	firstTail := tailMessages[0]
-	if !strings.HasPrefix(firstTail, "User: ") && !strings.HasPrefix(firstTail, "Assistant: ") {
-		t.Errorf("tail should start at a message boundary, first chunk: %q", firstTail)
+	// The tail should end with the last message.
+	if !strings.HasSuffix(parts[1], "Final cleanup steps") {
+		t.Errorf("tail should end with the last message, got:\n%s", parts[1])
 	}
 }
 
@@ -272,4 +272,141 @@ func TestExcerptBookendsSingleMessage(t *testing.T) {
 	if len(got) > 10003 {
 		t.Errorf("expected truncation, got length %d", len(got))
 	}
+}
+
+func TestExcerptBookendsOversizedEarlyChunk(t *testing.T) {
+	// Simulates the real-world case: short user message, then a massive
+	// assistant response, then more normal-sized messages.
+	messages := []string{
+		"User: Fix the authentication bug",
+		"Assistant: " + strings.Repeat("I looked at the code and found several issues. ", 200),
+		"User: That worked, thanks",
+		"Assistant: Great, let me know if you need anything else",
+	}
+	text := strings.Join(messages, "\n\n")
+
+	got := ExcerptBookends(text, 200)
+
+	// Head should contain the first user message AND part of the oversized
+	// assistant response, not just the tiny user message alone.
+	parts := strings.Split(got, "\n\n[...]\n\n")
+	if len(parts) != 2 {
+		t.Fatalf("expected [...] separator, got:\n%s", got)
+	}
+
+	if !strings.HasPrefix(parts[0], "User: Fix the authentication bug") {
+		t.Errorf("head should start with first message, got:\n%s", parts[0])
+	}
+
+	// The head should be substantially larger than just the first message (32 chars).
+	if len(parts[0]) < 100 {
+		t.Errorf("head should include truncated content from the oversized chunk, got %d chars:\n%s", len(parts[0]), parts[0])
+	}
+
+	// Tail should end with the last message.
+	if !strings.HasSuffix(parts[1], "let me know if you need anything else") {
+		t.Errorf("tail should end with last message, got:\n%s", parts[1])
+	}
+}
+
+func TestExcerptBookendsOversizedTailChunk(t *testing.T) {
+	// Oversized chunk near the end.
+	messages := []string{
+		"User: Start of conversation",
+		"Assistant: Short reply",
+		"User: Another question",
+		"Assistant: " + strings.Repeat("Here is a detailed explanation. ", 200),
+		"User: Final short message",
+	}
+	text := strings.Join(messages, "\n\n")
+
+	got := ExcerptBookends(text, 200)
+
+	parts := strings.Split(got, "\n\n[...]\n\n")
+	if len(parts) != 2 {
+		t.Fatalf("expected [...] separator, got:\n%s", got)
+	}
+
+	// Tail should include truncated content from the oversized chunk,
+	// not just the tiny final message.
+	if len(parts[1]) < 100 {
+		t.Errorf("tail should include truncated content from oversized chunk, got %d chars:\n%s", len(parts[1]), parts[1])
+	}
+
+	if !strings.HasSuffix(got, "Final short message") {
+		t.Errorf("should end with final message, got:\n%s", got)
+	}
+}
+
+func TestTruncateHead(t *testing.T) {
+	t.Run("short text unchanged", func(t *testing.T) {
+		got := truncateHead("hello world", 100)
+		if got != "hello world" {
+			t.Errorf("got %q", got)
+		}
+	})
+
+	t.Run("breaks at sentence", func(t *testing.T) {
+		text := "First sentence. Second sentence. Third sentence is longer."
+		got := truncateHead(text, 40)
+		if !strings.HasSuffix(got, ".") {
+			t.Errorf("expected sentence boundary, got %q", got)
+		}
+		if len(got) > 40 {
+			t.Errorf("expected <= 40 chars, got %d", len(got))
+		}
+	})
+
+	t.Run("breaks at newline", func(t *testing.T) {
+		text := "first line with no periods\nsecond line\nthird line is extra"
+		got := truncateHead(text, 35)
+		if strings.Contains(got, "second") {
+			t.Errorf("should break before second line, got %q", got)
+		}
+	})
+
+	t.Run("breaks at word", func(t *testing.T) {
+		text := strings.Repeat("word ", 20)
+		got := truncateHead(text, 30)
+		if strings.HasSuffix(got, "...") {
+			t.Errorf("should break at word boundary, not hard truncate, got %q", got)
+		}
+	})
+
+	t.Run("hard truncate no boundaries", func(t *testing.T) {
+		text := strings.Repeat("x", 100)
+		got := truncateHead(text, 50)
+		if !strings.HasSuffix(got, "...") {
+			t.Errorf("expected ... suffix for hard truncation, got %q", got)
+		}
+	})
+}
+
+func TestTruncateTail(t *testing.T) {
+	t.Run("short text unchanged", func(t *testing.T) {
+		got := truncateTail("hello world", 100)
+		if got != "hello world" {
+			t.Errorf("got %q", got)
+		}
+	})
+
+	t.Run("breaks at sentence", func(t *testing.T) {
+		text := "First sentence is long. Second sentence. Third sentence."
+		got := truncateTail(text, 40)
+		// Should keep the end, breaking at a sentence boundary.
+		if !strings.HasSuffix(got, "Third sentence.") {
+			t.Errorf("expected to end with last sentence, got %q", got)
+		}
+		if len(got) > 40 {
+			t.Errorf("expected <= 40 chars, got %d", len(got))
+		}
+	})
+
+	t.Run("hard truncate no boundaries", func(t *testing.T) {
+		text := strings.Repeat("x", 100)
+		got := truncateTail(text, 50)
+		if !strings.HasPrefix(got, "...") {
+			t.Errorf("expected ... prefix for hard truncation, got %q", got)
+		}
+	})
 }
