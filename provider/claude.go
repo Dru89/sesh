@@ -117,7 +117,10 @@ func (c *Claude) ListSessions(ctx context.Context) ([]Session, error) {
 			searchParts = append(searchParts, slug)
 		}
 
-		title := info.firstDisplay
+		// The first prompt is often multi-line (pasted text, code blocks).
+		// Flatten it to a single line so the title doesn't render across
+		// multiple rows in the picker or wrap in `show`/`--json` output.
+		title := FlattenWhitespace(info.firstDisplay)
 		if len(title) > 120 {
 			title = title[:117] + "..."
 		}
