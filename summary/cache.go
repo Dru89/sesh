@@ -48,19 +48,19 @@ func NewCache() *Cache {
 	return c
 }
 
-// Get returns the cached summary for a session, if it exists and is still fresh.
-// A summary is considered stale if the session's last_used time has changed
-// since the summary was generated.
+// Get returns the cached summary for a session, if one exists. The lastUsed
+// argument is accepted for API symmetry with NeedsSummary but does not gate the
+// result: a stale summary is still a far better display title than the raw
+// first prompt (which is often multi-line and unhelpful), and staleness is
+// handled separately by NeedsSummary, which schedules regeneration. Decoupling
+// display from staleness means a session that picked up new activity after
+// being summarized keeps showing its summary instead of reverting to the raw
+// title until the next index run.
 func (c *Cache) Get(sessionID string, lastUsed time.Time) (string, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	e, ok := c.entries[sessionID]
 	if !ok {
-		return "", false
-	}
-	// Stale if the session has been used since we generated the summary,
-	// with a 1-hour cooldown to avoid re-summarizing active sessions constantly.
-	if lastUsed.After(e.LastUsed) && time.Since(e.Generated) > time.Hour {
 		return "", false
 	}
 	return e.Summary, true

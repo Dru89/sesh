@@ -389,7 +389,7 @@ Any executable that outputs `[{"id", "title", "created", "last_used", ...}]` to 
 
 #### Architecture
 
-- `summary/cache.go` — JSON-file-backed cache at `~/.cache/sesh/summaries.json`. Keyed by session ID. Staleness check: `last_used` has changed AND summary is >1 hour old (prevents re-summarizing active sessions on every run).
+- `summary/cache.go` — JSON-file-backed cache at `~/.cache/sesh/summaries.json`. Keyed by session ID. Display and regeneration are decoupled: `Get()` returns a cached summary whenever one exists (a stale summary is a better display title than the raw, often multi-line first prompt), while `NeedsSummary()` flags entries for regeneration when `last_used` has changed AND the summary is >1 hour old (prevents re-summarizing active sessions on every run).
 - `summary/generate.go` — Shells out to user-configured command. Session text (user prompts) goes on stdin, summary comes out on stdout. 30-second per-summary timeout. Supports batch generation with progress callback. All LLM prompts are assembled by `BuildPrompt()`, which layers a system prompt (role framing), transcript, and task prompt, with support for `{{TRANSCRIPT}}` template expansion in custom prompts.
 - `cmd/sesh/main.go` — Wires it together. `sesh index` for bulk generation. Normal `sesh` runs lazy background generation (up to 10 sessions) in a goroutine during the TUI picker.
 
