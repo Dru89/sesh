@@ -40,18 +40,29 @@ type Provider interface {
 }
 
 // DisplayTitle returns the best available display title for a session.
-// Prefers a generated summary over the raw title when available.
+// Prefers a generated summary over the raw title when available. The result is
+// always a single line — raw titles (e.g. a Claude session's first prompt) can
+// span multiple lines, which would render across several rows and break the
+// TUI list layout, so any embedded newlines are collapsed to spaces.
 func (s Session) DisplayTitle() string {
-	if s.Summary != "" {
-		return s.Summary
+	switch {
+	case s.Summary != "":
+		return FlattenWhitespace(s.Summary)
+	case s.Title != "":
+		return FlattenWhitespace(s.Title)
+	case s.Slug != "":
+		return FlattenWhitespace(s.Slug)
+	default:
+		return s.ID
 	}
-	if s.Title != "" {
-		return s.Title
-	}
-	if s.Slug != "" {
-		return s.Slug
-	}
-	return s.ID
+}
+
+// FlattenWhitespace collapses every run of whitespace (spaces, tabs, newlines)
+// into a single space and trims the ends. Display titles must be a single line:
+// a value containing newlines renders across multiple terminal rows, which
+// overflows the picker and pushes the prompt and first results off the screen.
+func FlattenWhitespace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // RelativeTime formats a time as a human-readable relative string.

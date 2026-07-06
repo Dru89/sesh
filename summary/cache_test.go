@@ -31,39 +31,35 @@ func TestCacheMiss(t *testing.T) {
 	}
 }
 
-func TestCacheStaleness(t *testing.T) {
+// TestCacheGetIgnoresStaleness verifies that Get returns a cached summary for
+// display even when the session has been used since the summary was generated.
+// Staleness is a regeneration concern handled by NeedsSummary; showing a stale
+// summary beats falling back to the raw (often multi-line) first prompt.
+func TestCacheGetIgnoresStaleness(t *testing.T) {
 	c := newTestCache(t)
 
 	oldTime := time.Now().Add(-2 * time.Hour)
-	c.Put("ses_1", "Old summary", oldTime)
 
-	// Same last_used — should hit.
-	_, ok := c.Get("ses_1", oldTime)
-	if !ok {
-		t.Error("expected cache hit when last_used unchanged")
-	}
-
-	// Newer last_used, but generated < 1 hour ago — should still hit
-	// because the cooldown hasn't expired.
+	// Stale by NeedsSummary's rule: last_used advanced and generation is old.
 	c.entries["ses_1"] = Entry{
 		Summary:   "Old summary",
 		LastUsed:  oldTime,
-		Generated: time.Now().Add(-30 * time.Minute), // generated 30 min ago
-	}
-	_, ok = c.Get("ses_1", time.Now()) // last_used changed
-	if !ok {
-		t.Error("expected cache hit within cooldown period")
+		Generated: time.Now().Add(-2 * time.Hour),
 	}
 
-	// Newer last_used AND generated > 1 hour ago — should be stale.
-	c.entries["ses_1"] = Entry{
-		Summary:   "Old summary",
-		LastUsed:  oldTime,
-		Generated: time.Now().Add(-2 * time.Hour), // generated 2 hours ago
+	// Get still returns the summary for display.
+	got, ok := c.Get("ses_1", time.Now())
+	if !ok {
+		t.Fatal("expected Get to return a stale summary for display")
 	}
-	_, ok = c.Get("ses_1", time.Now()) // last_used changed
-	if ok {
-		t.Error("expected cache miss for stale entry")
+	if got != "Old summary" {
+		t.Errorf("got %q, want %q", got, "Old summary")
+	}
+
+	// NeedsSummary still flags it for regeneration.
+	need := c.NeedsSummary([]SessionRef{{ID: "ses_1", LastUsed: time.Now()}})
+	if len(need) != 1 {
+		t.Errorf("expected stale entry to be flagged for regeneration, got %d", len(need))
 	}
 }
 

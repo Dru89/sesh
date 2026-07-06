@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Fix TUI picker scrolling the prompt and first sessions off the top of the screen — multi-line titles (a Claude session's raw first prompt, which can span several lines) now collapse to a single line, and every rendered line is clamped to the terminal width so nothing wraps
+- Clamp the help bar and prompt line to the terminal width, and fall back to the list-only view when the terminal is too narrow for a usable detail pane
+- Show a cached summary even when it's stale instead of reverting to the raw first prompt — staleness now only governs regeneration, not display, so a session that picked up new activity after being summarized keeps a useful title until the next index run
+
 ## [1.1.1] - 2026-04-27
 
 - Fix `ExcerptBookends` skipping oversized message chunks — sessions with a large early assistant response (e.g. 33K chars) would produce excerpts containing only the tiny first user message, leading to poor or wrong summaries

@@ -370,7 +370,11 @@ func (m model) View() string {
 		w = 80
 	}
 
-	if m.showDetail && len(m.filtered) > 0 && m.cursor < len(m.filtered) {
+	// A split view needs room for the list column, the separator, and a usable
+	// detail column. Below that, fall back to the list-only view rather than
+	// rendering a squeezed (or negative-width) detail pane.
+	const minDetailWidth = 60
+	if m.showDetail && w >= minDetailWidth && len(m.filtered) > 0 && m.cursor < len(m.filtered) {
 		return m.viewWithDetail(w)
 	}
 	return m.viewList(w, w, true)
@@ -383,6 +387,9 @@ func (m model) viewWithDetail(totalW int) string {
 		listW = 30
 	}
 	detailW := totalW - listW - 3 // 3 for the separator column
+	if detailW < 1 {
+		detailW = 1
+	}
 
 	// Render without help bar so we can place it at the bottom after merging.
 	listView := m.viewList(listW, totalW, false)
@@ -420,19 +427,21 @@ func (m model) viewWithDetail(totalW int) string {
 	sep := dimStyle.Render(" │ ")
 	for i := 0; i < maxLines; i++ {
 		left := listLines[i]
-		// Pad left column to listW.
+		// Clamp then pad the left column to exactly listW so the combined row
+		// (left + separator + detail) never exceeds the terminal width and wraps.
+		left = clampLine(left, listW)
 		leftW := lipgloss.Width(left)
 		if leftW < listW {
 			left += strings.Repeat(" ", listW-leftW)
 		}
 		b.WriteString(left)
 		b.WriteString(sep)
-		b.WriteString(detailLines[i])
+		b.WriteString(clampLine(detailLines[i], detailW))
 		b.WriteString("\n")
 	}
 
 	// Help bar always at the bottom, spanning the full width.
-	b.WriteString(m.helpBar())
+	b.WriteString(clampLine(m.helpBar(), totalW))
 
 	return b.String()
 }
@@ -458,9 +467,9 @@ func (m model) viewDetail(w int) string {
 	}
 
 	b.WriteString(labelStyle.Render("Title:      "))
-	title := s.Title
-	if len(title) > w-12 && w > 15 {
-		title = title[:w-15] + "…"
+	title := provider.FlattenWhitespace(s.Title)
+	if lipgloss.Width(title) > w-12 && w > 15 {
+		title = ansi.Truncate(title, w-13, "…")
 	}
 	b.WriteString(title)
 	b.WriteString("\n")
@@ -569,12 +578,11 @@ func (m model) viewList(w int, fullW int, includeHelp bool) string {
 	} else {
 		ti.PromptStyle = promptStyle
 	}
-	b.WriteString(ti.View())
 	countStr := fmt.Sprintf("  %d/%d", len(m.filtered), len(m.all))
 	if m.searchMode == "ai" {
 		countStr += " (AI)"
 	}
-	b.WriteString(countStyle.Render(countStr))
+	b.WriteString(clampLine(ti.View()+countStyle.Render(countStr), w))
 	b.WriteString("\n")
 	b.WriteString(strings.Repeat("─", clamp(w, 1, 120)))
 	b.WriteString("\n")
@@ -601,11 +609,17 @@ func (m model) viewList(w int, fullW int, includeHelp bool) string {
 		s := m.filtered[i]
 		isSel := i == m.cursor
 
+		// Build the row into a local buffer so it can be clamped to the column
+		// budget before emitting. A row wider than the terminal would wrap onto
+		// a second physical line, throwing off the line count and scrolling the
+		// prompt and first results off the top of the screen.
+		var row strings.Builder
+
 		// Cursor.
 		if isSel {
-			b.WriteString(cursorMark)
+			row.WriteString(cursorMark)
 		} else {
-			b.WriteString("  ")
+			row.WriteString("  ")
 		}
 
 		// Agent badge (padded to 10 chars).
@@ -615,7 +629,8 @@ func (m model) viewList(w int, fullW int, includeHelp bool) string {
 			badgePad = 1
 		}
 
-		// Title.
+		// Title. DisplayTitle is already single-line; truncate to its column
+		// budget (ANSI/width-aware so multi-byte titles aren't cut mid-rune).
 		title := s.DisplayTitle()
 		sid := truncateID(s.ID, 10)
 		maxTitleW := w - 36
@@ -626,8 +641,8 @@ func (m model) viewList(w int, fullW int, includeHelp bool) string {
 		if maxTitleW < 20 {
 			maxTitleW = 20
 		}
-		if len(title) > maxTitleW {
-			title = title[:maxTitleW-1] + "…"
+		if lipgloss.Width(title) > maxTitleW {
+			title = ansi.Truncate(title, maxTitleW, "…")
 		}
 
 		// Time and ID.
@@ -639,9 +654,9 @@ func (m model) viewList(w int, fullW int, includeHelp bool) string {
 			title = dimStyle.Render(title)
 		}
 
-		b.WriteString(badge)
-		b.WriteString(strings.Repeat(" ", badgePad))
-		b.WriteString(title)
+		row.WriteString(badge)
+		row.WriteString(strings.Repeat(" ", badgePad))
+		row.WriteString(title)
 
 		if m.showDetail {
 			// Compact: just time, no ID.
@@ -650,8 +665,8 @@ func (m model) viewList(w int, fullW int, includeHelp bool) string {
 			if gap < 2 {
 				gap = 2
 			}
-			b.WriteString(strings.Repeat(" ", gap))
-			b.WriteString(when)
+			row.WriteString(strings.Repeat(" ", gap))
+			row.WriteString(when)
 		} else {
 			// Full: time + ID.
 			idStr := idStyle.Render(sid)
@@ -661,30 +676,33 @@ func (m model) viewList(w int, fullW int, includeHelp bool) string {
 			if gap < 2 {
 				gap = 2
 			}
-			b.WriteString(strings.Repeat(" ", gap))
-			b.WriteString(suffix)
+			row.WriteString(strings.Repeat(" ", gap))
+			row.WriteString(suffix)
 		}
+		b.WriteString(clampLine(row.String(), w))
 		b.WriteString("\n")
 
 		// Show directory for the selected row (only in list-only mode).
 		if !m.showDetail && isSel && s.Directory != "" {
 			dir := abbreviateHome(s.Directory)
-			b.WriteString("  ")
-			b.WriteString(strings.Repeat(" ", 10+badgePad))
-			b.WriteString(dirStyle.Render(dir))
+			var dirLine strings.Builder
+			dirLine.WriteString("  ")
+			dirLine.WriteString(strings.Repeat(" ", 10+badgePad))
+			dirLine.WriteString(dirStyle.Render(dir))
+			b.WriteString(clampLine(dirLine.String(), w))
 			b.WriteString("\n")
 		}
 	}
 
 	if m.searching {
-		b.WriteString(aiStyle.Render("  Searching with AI...") + "\n")
+		b.WriteString(clampLine(aiStyle.Render("  Searching with AI..."), w) + "\n")
 	} else if len(m.filtered) == 0 {
-		b.WriteString(dimStyle.Render("  No matching sessions") + "\n")
+		b.WriteString(clampLine(dimStyle.Render("  No matching sessions"), w) + "\n")
 	}
 
 	b.WriteString("\n")
 	if includeHelp {
-		b.WriteString(m.helpBar())
+		b.WriteString(clampLine(m.helpBar(), w))
 	}
 
 	return b.String()
@@ -739,4 +757,17 @@ func truncateID(id string, maxLen int) string {
 		return id
 	}
 	return id[:maxLen] + "…"
+}
+
+// clampLine truncates a rendered line to at most w display columns, preserving
+// ANSI styling. Any single line wider than the terminal would wrap, inflating
+// the rendered height and scrolling the top of the picker out of view.
+func clampLine(line string, w int) string {
+	if w < 1 {
+		return line
+	}
+	if lipgloss.Width(line) > w {
+		return ansi.Truncate(line, w, "")
+	}
+	return line
 }

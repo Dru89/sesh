@@ -164,12 +164,44 @@ func TestDisplayTitle(t *testing.T) {
 			Session{ID: "ses_123"},
 			"ses_123",
 		},
+		{
+			"multi-line title flattened to one line",
+			Session{Title: "Fix the bug\n\nIt happens when\tthe input is empty", ID: "ses_123"},
+			"Fix the bug It happens when the input is empty",
+		},
+		{
+			"multi-line summary flattened to one line",
+			Session{Summary: "Refactored\nthe parser", Title: "raw", ID: "ses_123"},
+			"Refactored the parser",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := tt.session.DisplayTitle()
 			if got != tt.want {
 				t.Errorf("DisplayTitle() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFlattenWhitespace(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"single line unchanged", "hello world", "hello world"},
+		{"newlines collapsed", "line one\nline two", "line one line two"},
+		{"blank lines collapsed", "a\n\n\nb", "a b"},
+		{"tabs and crlf collapsed", "a\tb\r\nc", "a b c"},
+		{"leading and trailing trimmed", "  spaced out  ", "spaced out"},
+		{"empty stays empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := FlattenWhitespace(tt.in); got != tt.want {
+				t.Errorf("FlattenWhitespace(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}
