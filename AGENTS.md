@@ -44,7 +44,7 @@ All configuration lives in `~/.config/sesh/config.json`. Create it if it doesn't
 
 ## Adding a new provider
 
-sesh has built-in support for OpenCode and Claude Code (no configuration needed). For any other agent, you need two things:
+sesh has built-in support for OpenCode, Claude Code, and Claude Cowork (no configuration needed). For any other agent, you need two things:
 
 ### 1. A session list script
 
@@ -279,6 +279,7 @@ sesh/
 │   ├── session_test.go       # Tests: OpenCode SQLite, Claude JSONL, External provider
 │   ├── opencode.go           # OpenCode adapter — reads SQLite at ~/.local/share/opencode/opencode.db
 │   ├── claude.go             # Claude Code adapter — reads ~/.claude/history.jsonl + project transcripts
+│   ├── claude_cowork.go         # Claude Cowork adapter — reads Cowork session metadata + transcripts (desktop app userData dir)
 │   └── external.go           # External provider — shells out to user-defined command, parses JSON
 ├── summary/
 │   ├── cache.go              # JSON file cache at ~/.cache/sesh/summaries.json
@@ -325,7 +326,7 @@ type Provider interface {
 }
 ```
 
-Built-in providers (OpenCode, Claude) read agent data directly. External providers shell out to an executable that returns JSON. All providers return the same `Session` struct.
+Built-in providers (OpenCode, Claude, ClaudeCowork) read agent data directly. External providers shell out to an executable that returns JSON. All providers return the same `Session` struct.
 
 #### Resume flow
 
@@ -335,7 +336,7 @@ The binary outputs a shell command string to stdout (`cd /path && agent --resume
 
 `~/.config/sesh/config.json` (optional). Three categories of config:
 
-**Providers** (`providers`): Listed under built-in names (`opencode`, `claude`) to override resume commands or disable. Any other name is an external provider requiring `list_command`.
+**Providers** (`providers`): Listed under built-in names (`opencode`, `claude`, `claude-cowork`) to override resume commands or disable. Any other name is an external provider requiring `list_command`.
 
 **LLM commands** (`index`, `ask`, `recap`): Each subcommand has its own `command`, `system_prompt`, `prompt`, and `env` fields. `ask` also has `filter_command` for the classification pass. Each subcommand falls back through the others via a priority chain so you only need to configure one. The `system_prompt` field provides role-framing context (preventing the model from engaging with transcript content), while `prompt` is the task instruction. Both have sensible defaults with anti-response guardrails. Custom prompts can use `{{TRANSCRIPT}}` to control where session data is inserted.
 
@@ -370,6 +371,18 @@ Session transcripts live in `~/.claude/projects/<encoded-path>/<sessionId>.jsonl
 
 Resume: `claude --resume <id>` (binary at `~/.local/bin/claude`)
 
+#### Claude Cowork (local agent-mode sessions)
+
+Cowork is the Claude desktop app's local agent-mode feature, stored under the app's Electron `userData` dir (macOS `~/Library/Application Support/Claude`, Windows `%AppData%\Claude`, Linux `~/.config/Claude` — no official Linux app yet, so that path is untested). Separate from `~/.claude` (Claude Code CLI); the app's Chat tab lives in claude.ai web storage (IndexedDB) and is out of scope.
+
+One metadata file per session at `<base>/local-agent-mode-sessions/<uuid>/<uuid>/local_<uuid>.json` (fields include `sessionId`, `cliSessionId`, `title`, `userSelectedFolders`, `createdAt`/`lastActivityAt` in Unix ms, `isArchived`, `scheduledTaskId`/`sessionType`), with a sibling `local_<uuid>/` sandbox dir holding the transcript. Archived sessions are excluded (as in OpenCode). `Directory` is `userSelectedFolders[0]`, else empty — `cwd` points inside the app sandbox, not a project path.
+
+`SessionText` (lazy) prefers the transcript named `<cliSessionId>.jsonl` under `local_<uuid>/.claude/projects/*/`, else any nested transcript, else `local_<uuid>/audit.jsonl` — all the same JSONL shape, parsed by the shared `extractConversationText`.
+
+Not read: `<base>/claude-code-sessions/` (the app's VM/terminal Claude Code sessions) — already surfaced by the `claude` provider, so including them would double-list.
+
+Resume: not possible from a terminal (the app owns the session); best effort foregrounds the app (`open -a Claude` on macOS, `xdg-open`/`start` elsewhere).
+
 #### External providers
 
 Any executable that outputs `[{"id", "title", "created", "last_used", ...}]` to stdout. Timestamps accept RFC 3339 or Unix milliseconds as strings. See the provider setup section above for the full schema.
@@ -398,6 +411,7 @@ Any executable that outputs `[{"id", "title", "created", "last_used", ...}]` to 
 Each provider implements `SessionText(ctx, sessionID) string` to supply raw user prompt text for summary generation:
 - **OpenCode:** Queries first 10 user text parts from the SQLite database.
 - **Claude Code:** Reads the session transcript JSONL and extracts user message content strings.
+- **Claude Cowork:** Reads the nested Claude Code-format transcript, falling back to `audit.jsonl`, both parsed by the same `extractConversationText` helper as the Claude Code provider.
 - **External:** Returns the `text` field from the list command response (cached in memory from the initial list call).
 
 ### Build and test

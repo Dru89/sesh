@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Add `claude-cowork` built-in provider for Claude Cowork sessions (the desktop app's local agent-mode sessions), previously invisible to sesh
 - Fix TUI picker scrolling the prompt and first sessions off the top of the screen — multi-line titles (a Claude session's raw first prompt, which can span several lines) now collapse to a single line, and every rendered line is clamped to the terminal width so nothing wraps
 - Clamp the help bar and prompt line to the terminal width, and fall back to the list-only view when the terminal is too narrow for a usable detail pane
 - Show a cached summary even when it's stale instead of reverting to the raw first prompt — staleness now only governs regeneration, not display, so a session that picked up new activity after being summarized keeps a useful title until the next index run
