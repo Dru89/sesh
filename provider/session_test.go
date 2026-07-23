@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -337,6 +338,290 @@ func createTestClaudeData(t *testing.T) string {
 	os.WriteFile(filepath.Join(projectDir, "sess-1.jsonl"), []byte(transcript), 0644)
 
 	return dir
+}
+
+// --- Claude desktop app tests ---
+
+func TestClaudeCoworkListSessions(t *testing.T) {
+	baseDir, sessionID := createTestClaudeCoworkData(t, true)
+	c := &ClaudeCowork{baseDir: baseDir}
+
+	sessions, err := c.ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions failed: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+
+	s := sessions[0]
+	if s.Agent != "claude-cowork" {
+		t.Errorf("agent = %q, want claude-cowork", s.Agent)
+	}
+	if s.ID != sessionID {
+		t.Errorf("id = %q, want %q", s.ID, sessionID)
+	}
+	if s.Title != "Purple elephant planning session" {
+		t.Errorf("title = %q, want %q", s.Title, "Purple elephant planning session")
+	}
+	if s.Directory != "/home/user/project" {
+		t.Errorf("directory = %q, want %q", s.Directory, "/home/user/project")
+	}
+	if s.Created.IsZero() {
+		t.Error("expected non-zero Created time")
+	}
+	if s.LastUsed.IsZero() {
+		t.Error("expected non-zero LastUsed time")
+	}
+	if !strings.Contains(s.SearchText, "scheduled") {
+		t.Errorf("SearchText = %q, want it to contain sessionType %q", s.SearchText, "scheduled")
+	}
+	if !strings.Contains(s.SearchText, s.Title) {
+		t.Errorf("SearchText = %q, want it to contain the title %q so the picker can match it", s.SearchText, s.Title)
+	}
+	if !strings.Contains(s.SearchText, s.Directory) {
+		t.Errorf("SearchText = %q, want it to contain the directory %q", s.SearchText, s.Directory)
+	}
+}
+
+func TestClaudeCoworkFolderlessSessionHasNoDirectory(t *testing.T) {
+	dir := t.TempDir()
+	sessionsRoot := filepath.Join(dir, "local-agent-mode-sessions", "uuid-a", "uuid-b")
+	if err := os.MkdirAll(sessionsRoot, 0755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UnixMilli()
+	metadata := map[string]any{
+		"sessionId":           "local_folderless",
+		"title":               "Folderless task",
+		"userSelectedFolders": []string{},
+		"cwd":                 "/some/internal/sandbox/path/outputs",
+		"createdAt":           now,
+		"lastActivityAt":      now,
+	}
+	metaBytes, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionsRoot, "local_folderless.json"), metaBytes, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &ClaudeCowork{baseDir: dir}
+	sessions, err := c.ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions failed: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	if sessions[0].Directory != "" {
+		t.Errorf("directory = %q, want empty (cwd sandbox path must not be used)", sessions[0].Directory)
+	}
+}
+
+func TestClaudeCoworkSessionText(t *testing.T) {
+	baseDir, sessionID := createTestClaudeCoworkData(t, true)
+	c := &ClaudeCowork{baseDir: baseDir}
+
+	text := c.SessionText(context.Background(), sessionID)
+	if text == "" {
+		t.Fatal("expected non-empty session text")
+	}
+	if !strings.Contains(text, "Purple Elephant Sesh Test") {
+		t.Errorf("session text = %q, want it to contain the transcript marker %q", text, "Purple Elephant Sesh Test")
+	}
+	if strings.Contains(text, "Audit Fallback Marker") {
+		t.Errorf("session text should come from the transcript, not audit.jsonl: %q", text)
+	}
+}
+
+func TestClaudeCoworkSessionTextFallsBackToAudit(t *testing.T) {
+	// No nested .claude/projects transcript this time — only audit.jsonl.
+	baseDir, sessionID := createTestClaudeCoworkData(t, false)
+	c := &ClaudeCowork{baseDir: baseDir}
+
+	text := c.SessionText(context.Background(), sessionID)
+	if text == "" {
+		t.Fatal("expected non-empty session text from audit.jsonl fallback")
+	}
+	if !strings.Contains(text, "Audit Fallback Marker") {
+		t.Errorf("session text = %q, want it to contain the audit marker %q", text, "Audit Fallback Marker")
+	}
+}
+
+func TestClaudeCoworkSessionTextPrefersCliSessionIdTranscript(t *testing.T) {
+	baseDir, sessionID := createTestClaudeCoworkData(t, true)
+	// Add a decoy transcript whose name sorts before the cliSessionId file,
+	// so a glob-first implementation would return it instead.
+	projectDir := filepath.Join(baseDir, "local-agent-mode-sessions", "uuid-a", "uuid-b", sessionID, ".claude", "projects", "-escaped-path")
+	decoy := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"WRONG DECOY TRANSCRIPT"}]},"uuid":"d1"}` + "\n"
+	if err := os.WriteFile(filepath.Join(projectDir, "00000000-decoy.jsonl"), []byte(decoy), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	text := (&ClaudeCowork{baseDir: baseDir}).SessionText(context.Background(), sessionID)
+	if strings.Contains(text, "WRONG DECOY TRANSCRIPT") {
+		t.Errorf("SessionText returned the decoy transcript, not the cliSessionId one: %q", text)
+	}
+	if !strings.Contains(text, "Purple Elephant Sesh Test") {
+		t.Errorf("SessionText should return the cliSessionId transcript, got %q", text)
+	}
+}
+
+func TestClaudeCoworkExcludesArchived(t *testing.T) {
+	dir := t.TempDir()
+	sessionsRoot := filepath.Join(dir, "local-agent-mode-sessions", "uuid-a", "uuid-b")
+	if err := os.MkdirAll(sessionsRoot, 0755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UnixMilli()
+	metadata := map[string]any{
+		"sessionId":      "local_archived",
+		"title":          "Archived session",
+		"createdAt":      now,
+		"lastActivityAt": now,
+		"isArchived":     true,
+	}
+	metaBytes, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionsRoot, "local_archived.json"), metaBytes, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := (&ClaudeCowork{baseDir: dir}).ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions failed: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Errorf("expected archived session excluded, got %d", len(sessions))
+	}
+}
+
+func TestClaudeCoworkSkipsMalformedMetadata(t *testing.T) {
+	baseDir, _ := createTestClaudeCoworkData(t, true)
+
+	// Drop a malformed metadata file alongside the good one.
+	badDir := filepath.Join(baseDir, "local-agent-mode-sessions", "uuid-a", "uuid-c")
+	if err := os.MkdirAll(badDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(badDir, "local_bad-session.json"), []byte("{not valid json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &ClaudeCowork{baseDir: baseDir}
+	sessions, err := c.ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions failed: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session (malformed one skipped), got %d", len(sessions))
+	}
+}
+
+func TestClaudeCoworkMissingSessionsDir(t *testing.T) {
+	c := &ClaudeCowork{baseDir: "/nonexistent/path"}
+	sessions, err := c.ListSessions(context.Background())
+	if err != nil {
+		t.Errorf("expected nil error for missing dir, got %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Errorf("expected 0 sessions, got %d", len(sessions))
+	}
+}
+
+func TestClaudeCoworkResumeCommand(t *testing.T) {
+	c := &ClaudeCowork{}
+	s := Session{ID: "local_abc-123", Directory: "/home/user/project"}
+	got := c.ResumeCommand(s)
+	if got == "" {
+		t.Error("expected a non-empty best-effort resume command")
+	}
+}
+
+func TestClaudeCoworkResumeCommandOverride(t *testing.T) {
+	c := &ClaudeCowork{resumeCommand: "open-claude-cowork --session {{ID}}"}
+	s := Session{ID: "local_abc-123", Directory: "/home/user/project"}
+	got := c.ResumeCommand(s)
+	want := "open-claude-cowork --session local_abc-123"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// createTestClaudeCoworkData creates a minimal Claude desktop app session
+// store: local-agent-mode-sessions/<uuidA>/<uuidB>/local_<id>.json plus a
+// sibling sandbox dir local_<id>/ containing audit.jsonl and, when
+// withTranscript is true, a nested .claude/projects/<escaped>/<cli>.jsonl
+// transcript. Mirrors the real on-disk shape used by the desktop app.
+func createTestClaudeCoworkData(t *testing.T, withTranscript bool) (baseDir, sessionID string) {
+	t.Helper()
+	dir := t.TempDir()
+
+	sessionID = "local_a9f7b603-20ee-44a9-9042-f8cf7afd9195"
+	cliSessionID := "93a9c12b-2f64-436a-b592-f6dea7ae66c2"
+
+	now := time.Now().UnixMilli()
+	created := now - 60000
+
+	sessionsRoot := filepath.Join(dir, "local-agent-mode-sessions", "uuid-a", "uuid-b")
+	if err := os.MkdirAll(sessionsRoot, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	metadata := map[string]any{
+		"sessionId":           sessionID,
+		"cliSessionId":        cliSessionID,
+		"title":               "Purple elephant planning session",
+		"userSelectedFolders": []string{"/home/user/project"},
+		"cwd":                 "/some/internal/sandbox/path",
+		"createdAt":           created,
+		"lastActivityAt":      now,
+		"initialMessage":      "This is a test for Sesh.",
+		"scheduledTaskId":     "snippets-bot",
+		"sessionType":         "scheduled",
+		"model":               "claude-sonnet-5",
+		"isArchived":          false,
+	}
+	metaBytes, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionsRoot, sessionID+".json"), metaBytes, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	sandboxDir := filepath.Join(sessionsRoot, sessionID)
+
+	if withTranscript {
+		projectDir := filepath.Join(sandboxDir, ".claude", "projects", "-escaped-path")
+		if err := os.MkdirAll(projectDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		transcript := `{"type":"user","message":{"role":"user","content":"This is a test for Sesh."},"uuid":"u1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Purple Elephant Sesh Test"}]},"uuid":"a1"}
+`
+		if err := os.WriteFile(filepath.Join(projectDir, cliSessionID+".jsonl"), []byte(transcript), 0644); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		if err := os.MkdirAll(sandboxDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// audit.jsonl always present, used as the fallback source.
+	audit := `{"type":"user","session_id":"abc","message":{"role":"user","content":"This is a test for Sesh."},"uuid":"u1"}
+{"type":"assistant","session_id":"abc","message":{"role":"assistant","content":[{"type":"text","text":"Audit Fallback Marker"}]},"uuid":"a1"}
+`
+	if err := os.WriteFile(filepath.Join(sandboxDir, "audit.jsonl"), []byte(audit), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	return dir, sessionID
 }
 
 // --- External provider tests ---
