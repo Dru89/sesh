@@ -1805,8 +1805,31 @@ func buildProviders(cfg config) []provider.Provider {
 		providers = append(providers, provider.NewClaude())
 	}
 
+	// Built-in: Claude Cowork (local agent-mode sessions).
+	// If list_command is set, use it as an external provider instead.
+	if ca, ok := cfg.Providers["claude-cowork"]; ok {
+		if ca.isEnabled() {
+			if len(ca.ListCommand) > 0 {
+				providers = append(providers, provider.NewExternal(provider.ExternalConfig{
+					Name:          "claude-cowork",
+					ListCommand:   ca.ListCommand,
+					ResumeCommand: ca.resumeCommandStr(),
+					Env:           cfg.buildEnv(ca.Env),
+				}))
+			} else {
+				var opts []provider.ClaudeCoworkOption
+				if cmd := ca.resumeCommandStr(); cmd != "" {
+					opts = append(opts, provider.WithClaudeCoworkResumeCommand(cmd))
+				}
+				providers = append(providers, provider.NewClaudeCowork(opts...))
+			}
+		}
+	} else {
+		providers = append(providers, provider.NewClaudeCowork())
+	}
+
 	// External providers: anything in config that isn't a built-in name.
-	builtins := map[string]bool{"opencode": true, "claude": true}
+	builtins := map[string]bool{"opencode": true, "claude": true, "claude-cowork": true}
 	for name, pc := range cfg.Providers {
 		if builtins[name] || !pc.isEnabled() {
 			continue

@@ -223,7 +223,7 @@ func (c *Claude) SessionText(ctx context.Context, sessionID string) string {
 			continue
 		}
 		path := filepath.Join(projectsDir, dir.Name(), sessionID+".jsonl")
-		if text := c.extractConversationText(path); text != "" {
+		if text := extractConversationText(path); text != "" {
 			return text
 		}
 	}
@@ -231,8 +231,10 @@ func (c *Claude) SessionText(ctx context.Context, sessionID string) string {
 }
 
 // extractConversationText reads a session JSONL and pulls both user and
-// assistant message text in conversation order.
-func (c *Claude) extractConversationText(path string) string {
+// assistant message text in conversation order. Shared by the Claude and
+// ClaudeCowork providers, which both write/read the same transcript line
+// shape: {"message": {"role": ..., "content": ...}}.
+func extractConversationText(path string) string {
 	f, err := os.Open(path)
 	if err != nil {
 		return ""

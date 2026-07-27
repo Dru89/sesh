@@ -4,7 +4,7 @@
 
 # sesh
 
-A unified session browser for coding agents. Search across OpenCode, Claude Code, and any other agent with a single fuzzy picker, then resume directly into the session.
+A unified session browser for coding agents. Search across OpenCode, Claude Code, Claude Cowork, and any other agent with a single fuzzy picker, then resume directly into the session.
 
 ![sesh picker showing sessions from multiple coding agents](screenshots/picker.png)
 
@@ -125,6 +125,20 @@ If you use a wrapper script (like `ca`) instead of calling the agent binary dire
 ```
 
 `{{ID}}` is replaced with the session ID. The default commands are `opencode --session {{ID}}` and `claude --resume {{ID}}`.
+
+### Claude Cowork sessions
+
+sesh also surfaces Claude Cowork sessions (the desktop app's local agent-mode feature) as a `claude-cowork` provider, separate from Claude Code CLI sessions. These sessions live inside the desktop app and can't be resumed from a terminal, so the default "resume" command just brings the app to the foreground (`open -a Claude` on macOS). Override it if you have a better entry point:
+
+```json
+{
+  "providers": {
+    "claude-cowork": {
+      "resume_command": "my-claude-launcher {{ID}}"
+    }
+  }
+}
+```
 
 ### Disable a built-in provider
 

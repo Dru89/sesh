@@ -55,7 +55,7 @@
     },
     "providers": {
       "type": "object",
-      "description": "Session providers. Built-in names (\"opencode\", \"claude\") override defaults. Any other name creates an external provider.",
+      "description": "Session providers. Built-in names (\"opencode\", \"claude\", \"claude-cowork\") override defaults. Any other name creates an external provider.",
       "additionalProperties": {
         "$ref": "#/$defs/providerConfig"
       }

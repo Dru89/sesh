@@ -734,6 +734,9 @@ func TestBuildProvidersDefault(t *testing.T) {
 	if !contains(names, "claude") {
 		t.Error("expected claude provider")
 	}
+	if !contains(names, "claude-cowork") {
+		t.Error("expected claude-cowork provider")
+	}
 
 	// Verify they're the built-in types, not external.
 	for _, p := range providers {
@@ -745,6 +748,10 @@ func TestBuildProvidersDefault(t *testing.T) {
 		case "claude":
 			if _, ok := p.(*provider.Claude); !ok {
 				t.Errorf("claude should be *provider.Claude, got %T", p)
+			}
+		case "claude-cowork":
+			if _, ok := p.(*provider.ClaudeCowork); !ok {
+				t.Errorf("claude-cowork should be *provider.ClaudeCowork, got %T", p)
 			}
 		}
 	}
@@ -856,6 +863,19 @@ func TestBuildProvidersExternal(t *testing.T) {
 				t.Errorf("omp should be *provider.External, got %T", p)
 			}
 		}
+	}
+}
+
+func TestBuildProvidersClaudeCoworkDisabled(t *testing.T) {
+	disabled := false
+	cfg := config{
+		Providers: map[string]providerConfig{
+			"claude-cowork": {Enabled: &disabled},
+		},
+	}
+	providers := buildProviders(cfg)
+	if contains(providerNames(providers), "claude-cowork") {
+		t.Error("claude-cowork should be disabled")
 	}
 }
 
