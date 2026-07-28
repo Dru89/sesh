@@ -2,15 +2,18 @@
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-07-28
+
 - **Breaking:** rename the `claude` provider to `claude-code` for clarity next to the other Claude surfaces. The `claude` config key still works as a deprecated alias, but the `agent` name in output (JSON, list, stats) is now `claude-code`
 - Add `claude-code-desktop` built-in provider for Claude Code sessions started in the desktop app — these never appear in `~/.claude/history.jsonl`, so they were invisible to sesh. Uses the app's own session names as display titles and resumes with `claude --resume` in the session's directory
+- Add `claude-cowork` built-in provider for Claude Cowork sessions (the desktop app's local agent-mode sessions), previously invisible to sesh
 - Skip LLM summarization for sessions whose agent already wrote a real title (Claude Code Desktop and Cowork app-generated names) — the app's name is used as-is
 - Dedupe sessions that appear under both the `claude-code` and `claude-code-desktop` providers (a desktop session later resumed from the terminal)
 - Size the agent column in the picker and `sesh stats` to the longest provider name instead of a fixed width, so long names don't break alignment
-- Add `claude-cowork` built-in provider for Claude Cowork sessions (the desktop app's local agent-mode sessions), previously invisible to sesh
 - Fix TUI picker scrolling the prompt and first sessions off the top of the screen — multi-line titles (a Claude session's raw first prompt, which can span several lines) now collapse to a single line, and every rendered line is clamped to the terminal width so nothing wraps
-- Clamp the help bar and prompt line to the terminal width, and fall back to the list-only view when the terminal is too narrow for a usable detail pane
+- Clamp the help bar and prompt line to the terminal width, anchor the help bar at the bottom when the detail pane is taller than the list, and fall back to the list-only view when the terminal is too narrow for a usable detail pane
 - Show a cached summary even when it's stale instead of reverting to the raw first prompt — staleness now only governs regeneration, not display, so a session that picked up new activity after being summarized keeps a useful title until the next index run
+- Fix the PowerShell shell wrapper: correct `Out-String` piping and a `Substring` offset error in `sesh init powershell` output
 
 ## [1.1.1] - 2026-04-27
 
@@ -135,7 +138,8 @@ Initial release.
 - LLM fallback chains across subcommands
 - Shell wrapper for in-shell session resumption
 
-[Unreleased]: https://github.com/dru89/sesh/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/dru89/sesh/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/dru89/sesh/compare/v1.1.1...v2.0.0
 [1.1.1]: https://github.com/dru89/sesh/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/dru89/sesh/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/dru89/sesh/compare/v0.13.0...v1.0.0
