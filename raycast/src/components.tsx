@@ -6,6 +6,8 @@ import { SeshSession } from "./types";
 const AGENT_COLORS: Record<string, Color> = {
   opencode: Color.Blue,
   claude: Color.Purple,
+  "claude-desktop": Color.Magenta,
+  "claude-cowork": Color.Orange,
 };
 
 export function agentColor(agent: string): Color {
