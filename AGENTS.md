@@ -178,7 +178,7 @@ The prompt structure piped to the LLM on stdin is: `[system_prompt] --- [transcr
     "opencode": {
       "resume_command": "ca opencode -s {{ID}}"
     },
-    "claude": {
+    "claude-code": {
       "resume_command": "ca -r {{ID}}"
     },
     "omp": {
@@ -337,7 +337,7 @@ The binary outputs a shell command string to stdout (`cd /path && agent --resume
 
 `~/.config/sesh/config.json` (optional). Three categories of config:
 
-**Providers** (`providers`): Listed under built-in names (`opencode`, `claude`, `claude-desktop`, `claude-cowork`) to override resume commands or disable. Any other name is an external provider requiring `list_command`.
+**Providers** (`providers`): Listed under built-in names (`opencode`, `claude-code`, `claude-code-desktop`, `claude-cowork`; `claude` is a deprecated alias for `claude-code`) to override resume commands or disable. Any other name is an external provider requiring `list_command`.
 
 **LLM commands** (`index`, `ask`, `recap`): Each subcommand has its own `command`, `system_prompt`, `prompt`, and `env` fields. `ask` also has `filter_command` for the classification pass. Each subcommand falls back through the others via a priority chain so you only need to configure one. The `system_prompt` field provides role-framing context (preventing the model from engaging with transcript content), while `prompt` is the task instruction. Both have sensible defaults with anti-response guardrails. Custom prompts can use `{{TRANSCRIPT}}` to control where session data is inserted.
 
@@ -366,21 +366,21 @@ Resume: `opencode --session <id>` (binary at `~/.opencode/bin/opencode`)
 
 #### Claude Code (CLI)
 
-`~/.claude/history.jsonl` — one JSON line per user prompt, grouped by sessionId. Fields: display, timestamp (Unix ms), project (working directory), sessionId (UUID). Only prompts typed in a terminal land here — sessions started from the desktop app never do (see the `claude-desktop` provider below).
+`~/.claude/history.jsonl` — one JSON line per user prompt, grouped by sessionId. Fields: display, timestamp (Unix ms), project (working directory), sessionId (UUID). Only prompts typed in a terminal land here — sessions started from the desktop app never do (see the `claude-code-desktop` provider below).
 
 Session transcripts live in `~/.claude/projects/<encoded-path>/<sessionId>.jsonl`. The path encoding replaces `/` with `-`. The `slug` field appears on messages after the first exchange.
 
 Resume: `claude --resume <id>` (binary at `~/.local/bin/claude`)
 
-#### Claude Code Desktop (`claude-desktop`)
+#### Claude Code Desktop (`claude-code-desktop`)
 
-Claude Code sessions started from the desktop app's Claude Code tab. The app runs the regular Claude Code engine against real project directories, so transcripts land in the standard `~/.claude/projects/<encoded-path>/<cliSessionId>.jsonl` store — but the sessions never appear in `~/.claude/history.jsonl`, so the `claude` provider can't see them.
+Claude Code sessions started from the desktop app's Claude Code tab. The app runs the regular Claude Code engine against real project directories, so transcripts land in the standard `~/.claude/projects/<encoded-path>/<cliSessionId>.jsonl` store — but the sessions never appear in `~/.claude/history.jsonl`, so the `claude-code` provider can't see them.
 
 Metadata lives at `<base>/claude-code-sessions/<uuid>/<uuid>/local_<uuid>.json` under the same Electron `userData` dir the Cowork provider uses. Same metadata family as Cowork but with real project paths: fields include `sessionId`, `cliSessionId`, `title` (app-generated — e.g. "gdocs-sync empty results bug"), `cwd`/`originCwd` (the attached project directory, not a sandbox), `createdAt`/`lastActivityAt`/`lastFocusedAt` in Unix ms, `isArchived`, `scheduledTaskId`, `model`. Archived sessions are excluded. There is no sibling sandbox dir — the transcript is in the shared `~/.claude` store.
 
 The session ID exposed to sesh is `cliSessionId` (the Claude Code UUID that names the transcript and that `claude --resume` accepts), falling back to the `local_` sessionId if absent. App-generated titles are marked `CuratedTitle`, which exempts them from LLM summarization.
 
-`SessionText`: `transcriptTextFromProjects()` scans `~/.claude/projects/*/<id>.jsonl` — the same helper the `claude` provider uses.
+`SessionText`: `transcriptTextFromProjects()` scans `~/.claude/projects/*/<id>.jsonl` — the same helper the `claude-code` provider uses.
 
 Resume: `cd <cwd> && claude --resume <cliSessionId>` — desktop sessions are ordinary Claude Code sessions in the shared store, so terminal resume works (unlike Cowork).
 
@@ -392,7 +392,7 @@ One metadata file per session at `<base>/local-agent-mode-sessions/<uuid>/<uuid>
 
 `SessionText` (lazy) prefers the transcript named `<cliSessionId>.jsonl` under `local_<uuid>/.claude/projects/*/`, else any nested transcript, else `local_<uuid>/audit.jsonl` — all the same JSONL shape, parsed by the shared `extractConversationText`.
 
-Not read: `<base>/claude-code-sessions/` — those are the desktop app's Claude Code sessions, surfaced by the `claude-desktop` provider.
+Not read: `<base>/claude-code-sessions/` — those are the desktop app's Claude Code sessions, surfaced by the `claude-code-desktop` provider.
 
 Resume: not possible from a terminal (the app owns the session); best effort foregrounds the app (`open -a Claude` on macOS, `xdg-open`/`start` elsewhere).
 
@@ -410,8 +410,8 @@ Any executable that outputs `[{"id", "title", "created", "last_used", ...}]` to 
 - **Summary generation is pluggable.** No built-in LLM client. The user configures any command that reads stdin and writes a summary to stdout (e.g., `llm`, `claude -p`, a local model script). This avoids credential management complexity in sesh itself.
 - **Summaries replace display titles.** `Session.DisplayTitle()` prefers `Summary` > `Title` > `Slug` > `ID`. This means sessions with ugly auto-generated titles (common in external providers) get clean display names once summarized.
 - **Curated titles skip summarization.** `Session.CuratedTitle` marks agent-authored titles (the desktop app generates real session names for both Claude Code Desktop and Cowork sessions). `sesh index`, lazy indexing, the ask-time refresh, and the cache-warming hint all skip curated sessions — the title is already a good display name, and an LLM summary would only replace it.
-- **Providers collect sessions concurrently.** `collectSessions()` launches goroutines per provider and merges results. External provider failures log a warning and don't block other providers. `dedupeSessions()` then collapses entries sharing a session ID — a desktop session resumed from the terminal can appear in both the `claude` and `claude-desktop` providers, and the desktop entry (curated title) wins while keeping the latest `LastUsed` and both search corpora.
-- **Provider naming.** Three Claude surfaces map to three providers: `claude` (Claude Code CLI), `claude-desktop` (Claude Code in the desktop app), `claude-cowork` (the desktop app's Cowork/local agent mode). The `claude` name predates the others and stays for config compatibility.
+- **Providers collect sessions concurrently.** `collectSessions()` launches goroutines per provider and merges results. External provider failures log a warning and don't block other providers. `dedupeSessions()` then collapses entries sharing a session ID — a desktop session resumed from the terminal can appear in both the `claude-code` and `claude-code-desktop` providers, and the desktop entry (curated title) wins while keeping the latest `LastUsed` and both search corpora.
+- **Provider naming.** Three Claude surfaces map to three providers: `claude-code` (Claude Code CLI), `claude-code-desktop` (Claude Code in the desktop app), `claude-cowork` (the desktop app's Cowork/local agent mode). The pre-rename `claude` config key is still accepted as a deprecated alias for `claude-code`.
 
 ### Summary system
 

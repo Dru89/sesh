@@ -411,7 +411,7 @@ func testSessions() []provider.Session {
 	return []provider.Session{
 		{Agent: "opencode", ID: "ses_abc123", Title: "Auth middleware", LastUsed: now, Directory: "/home/drew/projects/sesh", SearchText: "Auth middleware sesh"},
 		{Agent: "opencode", ID: "ses_abc456", Title: "Fix tests", LastUsed: now.Add(-time.Hour), Directory: "/home/drew/projects/sesh", SearchText: "Fix tests sesh"},
-		{Agent: "claude", ID: "uuid-1234-5678", Title: "Refactor API", LastUsed: now.Add(-2 * time.Hour), Directory: "/home/drew/projects/api-gateway", SearchText: "Refactor API api-gateway"},
+		{Agent: "claude-code", ID: "uuid-1234-5678", Title: "Refactor API", LastUsed: now.Add(-2 * time.Hour), Directory: "/home/drew/projects/api-gateway", SearchText: "Refactor API api-gateway"},
 		{Agent: "opencode", ID: "ses_def789", Title: "Build pipeline", LastUsed: now.Add(-24 * time.Hour), Directory: "/home/drew/work/infra", SearchText: "Build pipeline infra"},
 	}
 }
@@ -477,12 +477,12 @@ func TestQueryFilterIntegration(t *testing.T) {
 		query := tui.BuildPrefixQuery("", "clude", "")
 		pq := tui.ParseQuery(query)
 		result := tui.FilterSessions(sessions, pq)
-		// "clude" should fuzzy-match "claude".
+		// "clude" should fuzzy-match "claude-code".
 		if len(result) != 1 {
 			t.Fatalf("expected 1 claude result, got %d", len(result))
 		}
-		if result[0].Agent != "claude" {
-			t.Errorf("expected claude, got %s", result[0].Agent)
+		if result[0].Agent != "claude-code" {
+			t.Errorf("expected claude-code, got %s", result[0].Agent)
 		}
 	})
 
@@ -572,8 +572,8 @@ func TestComputeStats(t *testing.T) {
 	sessions := []provider.Session{
 		{Agent: "opencode", Summary: "summary", Directory: "/project-a", LastUsed: now},
 		{Agent: "opencode", Summary: "", Directory: "/project-a", LastUsed: now.Add(-2 * time.Hour)},
-		{Agent: "claude", Summary: "summary", Directory: "/project-b", LastUsed: now.Add(-3 * 24 * time.Hour)},
-		{Agent: "claude", Summary: "summary", Directory: "/project-b", LastUsed: now.Add(-40 * 24 * time.Hour)},
+		{Agent: "claude-code", Summary: "summary", Directory: "/project-b", LastUsed: now.Add(-3 * 24 * time.Hour)},
+		{Agent: "claude-code", Summary: "summary", Directory: "/project-b", LastUsed: now.Add(-40 * 24 * time.Hour)},
 	}
 
 	stats := computeStats(sessions)
@@ -587,8 +587,8 @@ func TestComputeStats(t *testing.T) {
 	if stats.AgentCounts["opencode"] != 2 {
 		t.Errorf("opencode count = %d, want 2", stats.AgentCounts["opencode"])
 	}
-	if stats.AgentCounts["claude"] != 2 {
-		t.Errorf("claude count = %d, want 2", stats.AgentCounts["claude"])
+	if stats.AgentCounts["claude-code"] != 2 {
+		t.Errorf("claude-code count = %d, want 2", stats.AgentCounts["claude-code"])
 	}
 	if stats.Today != 2 {
 		t.Errorf("Today = %d, want 2", stats.Today)
@@ -731,11 +731,11 @@ func TestBuildProvidersDefault(t *testing.T) {
 	if !contains(names, "opencode") {
 		t.Error("expected opencode provider")
 	}
-	if !contains(names, "claude") {
-		t.Error("expected claude provider")
+	if !contains(names, "claude-code") {
+		t.Error("expected claude-code provider")
 	}
-	if !contains(names, "claude-desktop") {
-		t.Error("expected claude-desktop provider")
+	if !contains(names, "claude-code-desktop") {
+		t.Error("expected claude-code-desktop provider")
 	}
 	if !contains(names, "claude-cowork") {
 		t.Error("expected claude-cowork provider")
@@ -748,13 +748,13 @@ func TestBuildProvidersDefault(t *testing.T) {
 			if _, ok := p.(*provider.OpenCode); !ok {
 				t.Errorf("opencode should be *provider.OpenCode, got %T", p)
 			}
-		case "claude":
+		case "claude-code":
 			if _, ok := p.(*provider.Claude); !ok {
-				t.Errorf("claude should be *provider.Claude, got %T", p)
+				t.Errorf("claude-code should be *provider.Claude, got %T", p)
 			}
-		case "claude-desktop":
+		case "claude-code-desktop":
 			if _, ok := p.(*provider.ClaudeDesktop); !ok {
-				t.Errorf("claude-desktop should be *provider.ClaudeDesktop, got %T", p)
+				t.Errorf("claude-code-desktop should be *provider.ClaudeDesktop, got %T", p)
 			}
 		case "claude-cowork":
 			if _, ok := p.(*provider.ClaudeCowork); !ok {
@@ -788,10 +788,10 @@ func TestBuildProvidersListCommandOverridesBuiltin(t *testing.T) {
 }
 
 func TestBuildProvidersListCommandOverridesClaude(t *testing.T) {
-	// Same for claude.
+	// Same for claude-code.
 	cfg := config{
 		Providers: map[string]providerConfig{
-			"claude": {
+			"claude-code": {
 				ListCommand:   []string{"cat", "claude.json"},
 				ResumeCommand: json.RawMessage(`"claude --resume {{ID}}"`),
 			},
@@ -800,14 +800,49 @@ func TestBuildProvidersListCommandOverridesClaude(t *testing.T) {
 	providers := buildProviders(cfg)
 
 	for _, p := range providers {
-		if p.Name() == "claude" {
+		if p.Name() == "claude-code" {
 			if _, ok := p.(*provider.External); !ok {
-				t.Errorf("claude with list_command should be *provider.External, got %T", p)
+				t.Errorf("claude-code with list_command should be *provider.External, got %T", p)
 			}
 			return
 		}
 	}
-	t.Error("expected claude provider")
+	t.Error("expected claude-code provider")
+}
+
+func TestBuildProvidersLegacyClaudeKeyAlias(t *testing.T) {
+	// The pre-rename "claude" config key still applies to the claude-code
+	// provider so existing configs keep working.
+	disabled := false
+	cfg := config{
+		Providers: map[string]providerConfig{
+			"claude": {Enabled: &disabled},
+		},
+	}
+	providers := buildProviders(cfg)
+	names := providerNames(providers)
+	if contains(names, "claude-code") {
+		t.Error("legacy \"claude\" key with enabled=false should disable the claude-code provider")
+	}
+	// The legacy key must not fall through to external provider handling.
+	if contains(names, "claude") {
+		t.Error("legacy \"claude\" key should not create an external provider")
+	}
+}
+
+func TestBuildProvidersNewClaudeKeyWinsOverLegacy(t *testing.T) {
+	// When both keys are present, "claude-code" wins.
+	disabled := false
+	cfg := config{
+		Providers: map[string]providerConfig{
+			"claude":      {Enabled: &disabled},
+			"claude-code": {ResumeCommand: json.RawMessage(`"ca -r {{ID}}"`)},
+		},
+	}
+	providers := buildProviders(cfg)
+	if !contains(providerNames(providers), "claude-code") {
+		t.Error("claude-code should be enabled — the new key takes precedence over the legacy one")
+	}
 }
 
 func TestBuildProvidersBuiltinWithResumeOnly(t *testing.T) {
@@ -890,12 +925,12 @@ func TestBuildProvidersClaudeDesktopDisabled(t *testing.T) {
 	disabled := false
 	cfg := config{
 		Providers: map[string]providerConfig{
-			"claude-desktop": {Enabled: &disabled},
+			"claude-code-desktop": {Enabled: &disabled},
 		},
 	}
 	providers := buildProviders(cfg)
-	if contains(providerNames(providers), "claude-desktop") {
-		t.Error("claude-desktop should be disabled")
+	if contains(providerNames(providers), "claude-code-desktop") {
+		t.Error("claude-code-desktop should be disabled")
 	}
 }
 
@@ -908,8 +943,8 @@ func TestDedupeSessionsDesktopWinsOverClaude(t *testing.T) {
 	// Same session ID from both providers — the desktop app session was
 	// resumed in the terminal, so it shows up in history.jsonl too.
 	sessions := []provider.Session{
-		{Agent: "claude", ID: "shared-id", Title: "raw first prompt", LastUsed: newer, SearchText: "raw first prompt"},
-		{Agent: "claude-desktop", ID: "shared-id", Title: "Fix login redirect loop", LastUsed: older, SearchText: "Fix login redirect loop"},
+		{Agent: "claude-code", ID: "shared-id", Title: "raw first prompt", LastUsed: newer, SearchText: "raw first prompt"},
+		{Agent: "claude-code-desktop", ID: "shared-id", Title: "Fix login redirect loop", LastUsed: older, SearchText: "Fix login redirect loop"},
 		{Agent: "opencode", ID: "other-id", Title: "Unrelated", LastUsed: older},
 	}
 
@@ -924,8 +959,8 @@ func TestDedupeSessionsDesktopWinsOverClaude(t *testing.T) {
 			merged = s
 		}
 	}
-	if merged.Agent != "claude-desktop" {
-		t.Errorf("agent = %q, want claude-desktop (curated title wins)", merged.Agent)
+	if merged.Agent != "claude-code-desktop" {
+		t.Errorf("agent = %q, want claude-code-desktop (curated title wins)", merged.Agent)
 	}
 	if !merged.LastUsed.Equal(newer) {
 		t.Errorf("LastUsed = %v, want the later timestamp %v", merged.LastUsed, newer)
@@ -940,23 +975,23 @@ func TestDedupeSessionsDesktopWinsRegardlessOfOrder(t *testing.T) {
 	// desktop entry must win whether it arrives first or second.
 	now := time.Now()
 	sessions := []provider.Session{
-		{Agent: "claude-desktop", ID: "shared-id", Title: "App title", LastUsed: now},
-		{Agent: "claude", ID: "shared-id", Title: "raw prompt", LastUsed: now},
+		{Agent: "claude-code-desktop", ID: "shared-id", Title: "App title", LastUsed: now},
+		{Agent: "claude-code", ID: "shared-id", Title: "raw prompt", LastUsed: now},
 	}
 	out := dedupeSessions(sessions)
 	if len(out) != 1 {
 		t.Fatalf("expected 1 session after dedup, got %d", len(out))
 	}
-	if out[0].Agent != "claude-desktop" {
-		t.Errorf("agent = %q, want claude-desktop", out[0].Agent)
+	if out[0].Agent != "claude-code-desktop" {
+		t.Errorf("agent = %q, want claude-code-desktop", out[0].Agent)
 	}
 }
 
 func TestDedupeSessionsNoCollisionsPassThrough(t *testing.T) {
 	sessions := []provider.Session{
-		{Agent: "claude", ID: "a", LastUsed: time.Now()},
+		{Agent: "claude-code", ID: "a", LastUsed: time.Now()},
 		{Agent: "opencode", ID: "b", LastUsed: time.Now()},
-		{Agent: "claude-desktop", ID: "c", LastUsed: time.Now()},
+		{Agent: "claude-code-desktop", ID: "c", LastUsed: time.Now()},
 	}
 	out := dedupeSessions(sessions)
 	if len(out) != 3 {

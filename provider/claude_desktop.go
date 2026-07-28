@@ -57,7 +57,7 @@ func NewClaudeDesktop(opts ...ClaudeDesktopOption) *ClaudeDesktop {
 	return c
 }
 
-func (c *ClaudeDesktop) Name() string { return "claude-desktop" }
+func (c *ClaudeDesktop) Name() string { return "claude-code-desktop" }
 
 // claudeDesktopMetadata is the shape of a local_<uuid>.json session metadata file
 // under claude-code-sessions/. Same family as the Cowork metadata but with real
@@ -177,7 +177,7 @@ func (c *ClaudeDesktop) parseMetadata(path string) (Session, bool) {
 	}
 
 	return Session{
-		Agent:        "claude-desktop",
+		Agent:        "claude-code-desktop",
 		ID:           id,
 		Title:        title,
 		Created:      created,

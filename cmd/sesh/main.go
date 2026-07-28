@@ -1376,12 +1376,15 @@ func runStats(args []string) {
 	sort.Slice(agents, func(i, j int) bool {
 		return agents[i].count > agents[j].count
 	})
+	// Size the agent column to the longest name so long provider names
+	// (e.g. claude-code-desktop) don't break alignment.
+	agentW := agentColumnWidth(all)
 	for _, a := range agents {
 		if isTTY {
 			// ANSI codes add 9 bytes of invisible chars; pad extra to compensate.
-			fmt.Printf("  %-21s %d\n", colorAgent(a.name), a.count)
+			fmt.Printf("  %-*s %d\n", agentW+9, colorAgent(a.name), a.count)
 		} else {
-			fmt.Printf("  %-12s %d\n", a.name, a.count)
+			fmt.Printf("  %-*s %d\n", agentW, a.name, a.count)
 		}
 	}
 
@@ -1413,11 +1416,23 @@ func runStats(args []string) {
 		agent := s.Agent
 		if isTTY {
 			agent = colorAgent(agent)
-			fmt.Printf("  %-19s %-50s %s\n", agent, truncate(s.DisplayTitle(), 50), provider.RelativeTime(s.LastUsed))
+			fmt.Printf("  %-*s %-50s %s\n", agentW+9, agent, truncate(s.DisplayTitle(), 50), provider.RelativeTime(s.LastUsed))
 		} else {
-			fmt.Printf("  %-10s %-50s %s\n", agent, truncate(s.DisplayTitle(), 50), provider.RelativeTime(s.LastUsed))
+			fmt.Printf("  %-*s %-50s %s\n", agentW, agent, truncate(s.DisplayTitle(), 50), provider.RelativeTime(s.LastUsed))
 		}
 	}
+}
+
+// agentColumnWidth returns the width of the widest agent name among the
+// sessions, with a floor of 10 so short-name-only lists keep the old layout.
+func agentColumnWidth(sessions []provider.Session) int {
+	w := 10
+	for _, s := range sessions {
+		if len(s.Agent) > w {
+			w = len(s.Agent)
+		}
+	}
+	return w
 }
 
 func truncate(s string, max int) string {
@@ -1730,8 +1745,8 @@ func collectSessions(ctx context.Context, providers []provider.Provider, agentFi
 // dedupeSessions collapses entries that share a session ID across providers.
 // Claude Code sessions started in the desktop app live in the same transcript
 // store as CLI sessions, so one that is later resumed from a terminal can show
-// up under both the claude and claude-desktop providers. The desktop entry
-// wins — it carries the app's curated title — and the survivor keeps the
+// up under both the claude-code and claude-code-desktop providers. The desktop
+// entry wins — it carries the app's curated title — and the survivor keeps the
 // latest LastUsed and both search corpora.
 func dedupeSessions(all []provider.Session) []provider.Session {
 	byID := make(map[string]int, len(all))
@@ -1745,7 +1760,7 @@ func dedupeSessions(all []provider.Session) []provider.Session {
 		}
 		kept := out[i]
 		winner, loser := kept, s
-		if s.Agent == "claude-desktop" && kept.Agent != "claude-desktop" {
+		if s.Agent == "claude-code-desktop" && kept.Agent != "claude-code-desktop" {
 			winner, loser = s, kept
 		}
 		if loser.LastUsed.After(winner.LastUsed) {
@@ -1827,13 +1842,22 @@ func buildProviders(cfg config) []provider.Provider {
 		providers = append(providers, provider.NewOpenCode())
 	}
 
-	// Built-in: Claude Code.
+	// Built-in: Claude Code (CLI).
 	// If list_command is set, use it as an external provider instead.
-	if cc, ok := cfg.Providers["claude"]; ok {
+	// "claude" is the pre-rename config key, still accepted as an alias so
+	// existing configs keep working.
+	cc, ccOK := cfg.Providers["claude-code"]
+	if !ccOK {
+		if legacy, legacyOK := cfg.Providers["claude"]; legacyOK {
+			cc, ccOK = legacy, true
+			fmt.Fprintf(os.Stderr, "sesh: warning: provider config key \"claude\" is deprecated; rename it to \"claude-code\"\n")
+		}
+	}
+	if ccOK {
 		if cc.isEnabled() {
 			if len(cc.ListCommand) > 0 {
 				providers = append(providers, provider.NewExternal(provider.ExternalConfig{
-					Name:          "claude",
+					Name:          "claude-code",
 					ListCommand:   cc.ListCommand,
 					ResumeCommand: cc.resumeCommandStr(),
 					Env:           cfg.buildEnv(cc.Env),
@@ -1850,13 +1874,13 @@ func buildProviders(cfg config) []provider.Provider {
 		providers = append(providers, provider.NewClaude())
 	}
 
-	// Built-in: Claude Desktop (Claude Code sessions in the desktop app).
+	// Built-in: Claude Code Desktop (Claude Code sessions in the desktop app).
 	// If list_command is set, use it as an external provider instead.
-	if cd, ok := cfg.Providers["claude-desktop"]; ok {
+	if cd, ok := cfg.Providers["claude-code-desktop"]; ok {
 		if cd.isEnabled() {
 			if len(cd.ListCommand) > 0 {
 				providers = append(providers, provider.NewExternal(provider.ExternalConfig{
-					Name:          "claude-desktop",
+					Name:          "claude-code-desktop",
 					ListCommand:   cd.ListCommand,
 					ResumeCommand: cd.resumeCommandStr(),
 					Env:           cfg.buildEnv(cd.Env),
@@ -1897,7 +1921,9 @@ func buildProviders(cfg config) []provider.Provider {
 	}
 
 	// External providers: anything in config that isn't a built-in name.
-	builtins := map[string]bool{"opencode": true, "claude": true, "claude-desktop": true, "claude-cowork": true}
+	// "claude" is the deprecated alias for "claude-code" — still reserved so
+	// it isn't picked up as an external provider.
+	builtins := map[string]bool{"opencode": true, "claude": true, "claude-code": true, "claude-code-desktop": true, "claude-cowork": true}
 	for name, pc := range cfg.Providers {
 		if builtins[name] || !pc.isEnabled() {
 			continue
