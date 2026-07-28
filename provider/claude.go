@@ -38,7 +38,7 @@ func NewClaude(opts ...ClaudeOption) *Claude {
 	return c
 }
 
-func (c *Claude) Name() string { return "claude" }
+func (c *Claude) Name() string { return "claude-code" }
 
 // historyEntry represents a single line from history.jsonl.
 type historyEntry struct {
@@ -126,7 +126,7 @@ func (c *Claude) ListSessions(ctx context.Context) ([]Session, error) {
 		}
 
 		sessions = append(sessions, Session{
-			Agent:      "claude",
+			Agent:      "claude-code",
 			ID:         id,
 			Title:      title,
 			Slug:       slug,

@@ -93,6 +93,7 @@ type model struct {
 	sessionText    SessionTextFunc
 	detailCache    map[string]string // agent:id -> text
 	debounceSeq    int               // incremented on each query change; used to discard stale debounce ticks
+	badgeW         int               // agent badge column width, sized to the longest agent name
 }
 
 func newModel(sessions []provider.Session, opts PickOptions) model {
@@ -116,6 +117,14 @@ func newModel(sessions []provider.Session, opts PickOptions) model {
 		searchMode:     "fuzzy",
 		sessionText:    opts.SessionText,
 		detailCache:    make(map[string]string),
+	}
+	// Size the agent badge column to the longest name across all sessions
+	// (not the filtered set, so the column doesn't jump while typing).
+	m.badgeW = 10
+	for _, s := range sessions {
+		if len(s.Agent) > m.badgeW {
+			m.badgeW = len(s.Agent)
+		}
 	}
 	m.filter()
 	return m
@@ -622,9 +631,9 @@ func (m model) viewList(w int, fullW int, includeHelp bool) string {
 			row.WriteString("  ")
 		}
 
-		// Agent badge (padded to 10 chars).
+		// Agent badge (padded to the longest agent name).
 		badge := renderAgent(s.Agent)
-		badgePad := 10 - len(s.Agent)
+		badgePad := m.badgeW - len(s.Agent)
 		if badgePad < 1 {
 			badgePad = 1
 		}
@@ -633,10 +642,10 @@ func (m model) viewList(w int, fullW int, includeHelp bool) string {
 		// budget (ANSI/width-aware so multi-byte titles aren't cut mid-rune).
 		title := s.DisplayTitle()
 		sid := truncateID(s.ID, 10)
-		maxTitleW := w - 36
+		maxTitleW := w - 26 - m.badgeW
 		if m.showDetail {
 			// In split view, skip the ID to save space.
-			maxTitleW = w - 22
+			maxTitleW = w - 12 - m.badgeW
 		}
 		if maxTitleW < 20 {
 			maxTitleW = 20

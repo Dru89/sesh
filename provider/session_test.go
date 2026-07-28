@@ -246,8 +246,8 @@ func TestClaudeListSessions(t *testing.T) {
 	}
 
 	s := sessions[0]
-	if s.Agent != "claude" {
-		t.Errorf("agent = %q, want claude", s.Agent)
+	if s.Agent != "claude-code" {
+		t.Errorf("agent = %q, want claude-code", s.Agent)
 	}
 	if s.Directory != "/home/user/project-b" {
 		t.Errorf("directory = %q, want %q", s.Directory, "/home/user/project-b")
@@ -355,8 +355,8 @@ func TestClaudeDesktopListSessions(t *testing.T) {
 	}
 
 	s := sessions[0]
-	if s.Agent != "claude-desktop" {
-		t.Errorf("agent = %q, want claude-desktop", s.Agent)
+	if s.Agent != "claude-code-desktop" {
+		t.Errorf("agent = %q, want claude-code-desktop", s.Agent)
 	}
 	if s.ID != cliSessionID {
 		t.Errorf("id = %q, want the cliSessionId %q (the resumable Claude Code UUID)", s.ID, cliSessionID)

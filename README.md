@@ -117,7 +117,7 @@ If you use a wrapper script (like `ca`) instead of calling the agent binary dire
     "opencode": {
       "resume_command": "ca opencode -s {{ID}}"
     },
-    "claude": {
+    "claude-code": {
       "resume_command": "ca -r {{ID}}"
     }
   }
@@ -128,14 +128,14 @@ If you use a wrapper script (like `ca`) instead of calling the agent binary dire
 
 ### Claude Code in the desktop app
 
-The Claude desktop app can run Claude Code sessions from its Claude Code tab. These are real Claude Code sessions against your project directories, but they never show up in the CLI's history file, so sesh surfaces them through a separate `claude-desktop` provider. It reads the app's session metadata — including the session names the app generates, which sesh uses as-is instead of generating its own summaries — and resumes with a plain `claude --resume` in the right directory, so you can pull a desktop session into your terminal.
+The Claude desktop app can run Claude Code sessions from its Claude Code tab. These are real Claude Code sessions against your project directories, but they never show up in the CLI's history file, so sesh surfaces them through a separate `claude-code-desktop` provider. It reads the app's session metadata — including the session names the app generates, which sesh uses as-is instead of generating its own summaries — and resumes with a plain `claude --resume` in the right directory, so you can pull a desktop session into your terminal.
 
 The three Claude providers are:
 
 | Provider | What it covers |
 |---|---|
-| `claude` | Claude Code sessions started in a terminal |
-| `claude-desktop` | Claude Code sessions started in the desktop app |
+| `claude-code` | Claude Code sessions started in a terminal |
+| `claude-code-desktop` | Claude Code sessions started in the desktop app |
 | `claude-cowork` | Cowork (the desktop app's local agent mode) |
 
 ### Claude Cowork sessions
@@ -157,7 +157,7 @@ sesh also surfaces Claude Cowork sessions (the desktop app's local agent-mode fe
 ```json
 {
   "providers": {
-    "claude": {
+    "claude-code": {
       "enabled": false
     }
   }
