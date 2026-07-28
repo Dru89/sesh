@@ -340,7 +340,239 @@ func createTestClaudeData(t *testing.T) string {
 	return dir
 }
 
-// --- Claude desktop app tests ---
+// --- Claude Desktop (desktop app Claude Code) tests ---
+
+func TestClaudeDesktopListSessions(t *testing.T) {
+	baseDir, claudeDir, cliSessionID := createTestClaudeDesktopData(t)
+	c := &ClaudeDesktop{baseDir: baseDir, claudeDir: claudeDir}
+
+	sessions, err := c.ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions failed: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+
+	s := sessions[0]
+	if s.Agent != "claude-desktop" {
+		t.Errorf("agent = %q, want claude-desktop", s.Agent)
+	}
+	if s.ID != cliSessionID {
+		t.Errorf("id = %q, want the cliSessionId %q (the resumable Claude Code UUID)", s.ID, cliSessionID)
+	}
+	if s.Title != "Fix login redirect loop" {
+		t.Errorf("title = %q, want %q", s.Title, "Fix login redirect loop")
+	}
+	if !s.CuratedTitle {
+		t.Error("expected CuratedTitle=true for an app-generated title")
+	}
+	if s.Directory != "/home/user/webapp" {
+		t.Errorf("directory = %q, want %q", s.Directory, "/home/user/webapp")
+	}
+	if s.Created.IsZero() {
+		t.Error("expected non-zero Created time")
+	}
+	if s.LastUsed.IsZero() {
+		t.Error("expected non-zero LastUsed time")
+	}
+	if !strings.Contains(s.SearchText, s.Title) {
+		t.Errorf("SearchText = %q, want it to contain the title %q", s.SearchText, s.Title)
+	}
+	if !strings.Contains(s.SearchText, s.Directory) {
+		t.Errorf("SearchText = %q, want it to contain the directory %q", s.SearchText, s.Directory)
+	}
+}
+
+func TestClaudeDesktopIDFallsBackToSessionID(t *testing.T) {
+	dir := t.TempDir()
+	sessionsRoot := filepath.Join(dir, "claude-code-sessions", "uuid-a", "uuid-b")
+	if err := os.MkdirAll(sessionsRoot, 0755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UnixMilli()
+	metadata := map[string]any{
+		"sessionId":      "local_no-cli-id",
+		"createdAt":      now,
+		"lastActivityAt": now,
+	}
+	metaBytes, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionsRoot, "local_no-cli-id.json"), metaBytes, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := (&ClaudeDesktop{baseDir: dir}).ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions failed: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	if sessions[0].ID != "local_no-cli-id" {
+		t.Errorf("id = %q, want fallback to sessionId %q", sessions[0].ID, "local_no-cli-id")
+	}
+	if sessions[0].CuratedTitle {
+		t.Error("expected CuratedTitle=false when the metadata has no title")
+	}
+}
+
+func TestClaudeDesktopExcludesArchived(t *testing.T) {
+	dir := t.TempDir()
+	sessionsRoot := filepath.Join(dir, "claude-code-sessions", "uuid-a", "uuid-b")
+	if err := os.MkdirAll(sessionsRoot, 0755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UnixMilli()
+	metadata := map[string]any{
+		"sessionId":      "local_archived",
+		"cliSessionId":   "11111111-2222-3333-4444-555555555555",
+		"title":          "Archived session",
+		"createdAt":      now,
+		"lastActivityAt": now,
+		"isArchived":     true,
+	}
+	metaBytes, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionsRoot, "local_archived.json"), metaBytes, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := (&ClaudeDesktop{baseDir: dir}).ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions failed: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Errorf("expected archived session excluded, got %d", len(sessions))
+	}
+}
+
+func TestClaudeDesktopSkipsMalformedMetadata(t *testing.T) {
+	baseDir, claudeDir, _ := createTestClaudeDesktopData(t)
+
+	badDir := filepath.Join(baseDir, "claude-code-sessions", "uuid-a", "uuid-c")
+	if err := os.MkdirAll(badDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(badDir, "local_bad-session.json"), []byte("{not valid json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &ClaudeDesktop{baseDir: baseDir, claudeDir: claudeDir}
+	sessions, err := c.ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions failed: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session (malformed one skipped), got %d", len(sessions))
+	}
+}
+
+func TestClaudeDesktopMissingSessionsDir(t *testing.T) {
+	c := &ClaudeDesktop{baseDir: "/nonexistent/path"}
+	sessions, err := c.ListSessions(context.Background())
+	if err != nil {
+		t.Errorf("expected nil error for missing dir, got %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Errorf("expected 0 sessions, got %d", len(sessions))
+	}
+}
+
+func TestClaudeDesktopSessionText(t *testing.T) {
+	baseDir, claudeDir, cliSessionID := createTestClaudeDesktopData(t)
+	c := &ClaudeDesktop{baseDir: baseDir, claudeDir: claudeDir}
+
+	text := c.SessionText(context.Background(), cliSessionID)
+	if text == "" {
+		t.Fatal("expected non-empty session text")
+	}
+	want := "User: The login page loops back to itself\n\nAssistant: Green Anvil Desktop Test"
+	if text != want {
+		t.Errorf("got %q, want %q", text, want)
+	}
+}
+
+func TestClaudeDesktopResumeCommand(t *testing.T) {
+	c := &ClaudeDesktop{}
+	s := Session{ID: "abc-123", Directory: "/home/user/webapp"}
+	got := c.ResumeCommand(s)
+	want := CdAndRun("/home/user/webapp", "claude --resume abc-123")
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestClaudeDesktopResumeCommandOverride(t *testing.T) {
+	c := &ClaudeDesktop{resumeCommand: "ca -r {{ID}}"}
+	s := Session{ID: "abc-123", Directory: "/home/user/webapp"}
+	got := c.ResumeCommand(s)
+	want := CdAndRun("/home/user/webapp", "ca -r abc-123")
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// createTestClaudeDesktopData creates the two stores a desktop Claude Code
+// session spans: metadata under <userData>/claude-code-sessions/<uuid>/<uuid>/
+// local_<id>.json, and the transcript in the shared <claudeDir>/projects
+// store named by cliSessionId. Mirrors the real on-disk shape.
+func createTestClaudeDesktopData(t *testing.T) (baseDir, claudeDir, cliSessionID string) {
+	t.Helper()
+	baseDir = t.TempDir()
+	claudeDir = t.TempDir()
+
+	sessionID := "local_b7e2f114-88a1-4c26-9b3d-5f0e2a9c7d61"
+	cliSessionID = "4d2f8c3a-1b5e-4f7a-9c8d-2e6b0a4f9d13"
+
+	now := time.Now().UnixMilli()
+	created := now - 60000
+
+	sessionsRoot := filepath.Join(baseDir, "claude-code-sessions", "uuid-a", "uuid-b")
+	if err := os.MkdirAll(sessionsRoot, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	metadata := map[string]any{
+		"sessionId":      sessionID,
+		"cliSessionId":   cliSessionID,
+		"title":          "Fix login redirect loop",
+		"titleSource":    "auto",
+		"cwd":            "/home/user/webapp",
+		"originCwd":      "/home/user/webapp",
+		"createdAt":      created,
+		"lastActivityAt": now,
+		"model":          "claude-opus-4-8",
+		"isArchived":     false,
+	}
+	metaBytes, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionsRoot, sessionID+".json"), metaBytes, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Transcript in the shared ~/.claude/projects store, named by cliSessionId.
+	projectDir := filepath.Join(claudeDir, "projects", "-home-user-webapp")
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	transcript := `{"type":"user","message":{"role":"user","content":"The login page loops back to itself"},"uuid":"u1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Green Anvil Desktop Test"}]},"uuid":"a1"}
+`
+	if err := os.WriteFile(filepath.Join(projectDir, cliSessionID+".jsonl"), []byte(transcript), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	return baseDir, claudeDir, cliSessionID
+}
+
+// --- Claude Cowork tests ---
 
 func TestClaudeCoworkListSessions(t *testing.T) {
 	baseDir, sessionID := createTestClaudeCoworkData(t, true)
@@ -381,6 +613,42 @@ func TestClaudeCoworkListSessions(t *testing.T) {
 	}
 	if !strings.Contains(s.SearchText, s.Directory) {
 		t.Errorf("SearchText = %q, want it to contain the directory %q", s.SearchText, s.Directory)
+	}
+	if !s.CuratedTitle {
+		t.Error("expected CuratedTitle=true for an app-generated title")
+	}
+}
+
+func TestClaudeCoworkInitialMessageTitleIsNotCurated(t *testing.T) {
+	dir := t.TempDir()
+	sessionsRoot := filepath.Join(dir, "local-agent-mode-sessions", "uuid-a", "uuid-b")
+	if err := os.MkdirAll(sessionsRoot, 0755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UnixMilli()
+	metadata := map[string]any{
+		"sessionId":      "local_untitled",
+		"initialMessage": "please look into the flaky tests",
+		"createdAt":      now,
+		"lastActivityAt": now,
+	}
+	metaBytes, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionsRoot, "local_untitled.json"), metaBytes, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := (&ClaudeCowork{baseDir: dir}).ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions failed: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	if sessions[0].CuratedTitle {
+		t.Error("a title derived from the initial message should not be curated — it still benefits from summarization")
 	}
 }
 

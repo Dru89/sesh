@@ -19,6 +19,12 @@ type Session struct {
 	LastUsed   time.Time `json:"last_used"`
 	Directory  string    `json:"directory,omitempty"`
 	SearchText string    `json:"-"`
+
+	// CuratedTitle marks the title as agent-authored — e.g. the desktop
+	// app's generated session names — rather than a raw first prompt.
+	// Curated titles are already good display names, so summary generation
+	// (sesh index, lazy indexing) skips these sessions.
+	CuratedTitle bool `json:"-"`
 }
 
 // Provider discovers sessions for a specific coding agent.

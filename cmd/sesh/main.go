@@ -453,7 +453,7 @@ func main() {
 	if cfg.hasAnyCommand() {
 		unsummarized := 0
 		for _, s := range all {
-			if s.Summary == "" && s.SearchText != "" {
+			if s.Summary == "" && s.SearchText != "" && !s.CuratedTitle {
 				unsummarized++
 			}
 		}
@@ -551,15 +551,20 @@ func runIndex(args []string) {
 	all := collectSessions(ctx, providers, *agentFilter)
 	providerMap := providersByName(providers)
 
-	// Find sessions that need summaries.
+	// Find sessions that need summaries. Sessions with agent-curated titles
+	// (e.g. the desktop app's generated names) are skipped — the title is
+	// already a good display name, so an LLM summary would only replace it.
 	var refs []summary.SessionRef
 	for _, s := range all {
+		if s.CuratedTitle {
+			continue
+		}
 		refs = append(refs, summary.SessionRef{ID: s.ID, LastUsed: s.LastUsed})
 	}
 	need := cache.NeedsSummary(refs)
 
 	if len(need) == 0 {
-		fmt.Fprintf(os.Stderr, "All %d sessions already have summaries.\n", len(all))
+		fmt.Fprintf(os.Stderr, "All %d sessions already have summaries or curated titles.\n", len(all))
 		return
 	}
 
@@ -625,6 +630,10 @@ func lazyIndex(ctx context.Context, cfg summary.Config, cache *summary.Cache, se
 
 	var refs []summary.SessionRef
 	for _, s := range sessions {
+		if s.CuratedTitle {
+			// Agent-curated titles are already good display names.
+			continue
+		}
 		refs = append(refs, summary.SessionRef{ID: s.ID, LastUsed: s.LastUsed})
 	}
 	need := cache.NeedsSummary(refs)
@@ -881,6 +890,10 @@ func runAsk(args []string) {
 		providerMap := providersByName(providers)
 		var refs []summary.SessionRef
 		for _, s := range all {
+			if s.CuratedTitle {
+				// Agent-curated titles already describe the session.
+				continue
+			}
 			refs = append(refs, summary.SessionRef{ID: s.ID, LastUsed: s.LastUsed})
 		}
 		stale := cache.NeedsSummary(refs)
@@ -1711,7 +1724,39 @@ func collectSessions(ctx context.Context, providers []provider.Provider, agentFi
 		}(p)
 	}
 	wg.Wait()
-	return all
+	return dedupeSessions(all)
+}
+
+// dedupeSessions collapses entries that share a session ID across providers.
+// Claude Code sessions started in the desktop app live in the same transcript
+// store as CLI sessions, so one that is later resumed from a terminal can show
+// up under both the claude and claude-desktop providers. The desktop entry
+// wins — it carries the app's curated title — and the survivor keeps the
+// latest LastUsed and both search corpora.
+func dedupeSessions(all []provider.Session) []provider.Session {
+	byID := make(map[string]int, len(all))
+	out := make([]provider.Session, 0, len(all))
+	for _, s := range all {
+		i, seen := byID[s.ID]
+		if !seen {
+			byID[s.ID] = len(out)
+			out = append(out, s)
+			continue
+		}
+		kept := out[i]
+		winner, loser := kept, s
+		if s.Agent == "claude-desktop" && kept.Agent != "claude-desktop" {
+			winner, loser = s, kept
+		}
+		if loser.LastUsed.After(winner.LastUsed) {
+			winner.LastUsed = loser.LastUsed
+		}
+		if loser.SearchText != "" {
+			winner.SearchText = strings.TrimSpace(winner.SearchText + " " + loser.SearchText)
+		}
+		out[i] = winner
+	}
+	return out
 }
 
 // applySummaries enriches sessions with cached summaries.
@@ -1805,6 +1850,29 @@ func buildProviders(cfg config) []provider.Provider {
 		providers = append(providers, provider.NewClaude())
 	}
 
+	// Built-in: Claude Desktop (Claude Code sessions in the desktop app).
+	// If list_command is set, use it as an external provider instead.
+	if cd, ok := cfg.Providers["claude-desktop"]; ok {
+		if cd.isEnabled() {
+			if len(cd.ListCommand) > 0 {
+				providers = append(providers, provider.NewExternal(provider.ExternalConfig{
+					Name:          "claude-desktop",
+					ListCommand:   cd.ListCommand,
+					ResumeCommand: cd.resumeCommandStr(),
+					Env:           cfg.buildEnv(cd.Env),
+				}))
+			} else {
+				var opts []provider.ClaudeDesktopOption
+				if cmd := cd.resumeCommandStr(); cmd != "" {
+					opts = append(opts, provider.WithClaudeDesktopResumeCommand(cmd))
+				}
+				providers = append(providers, provider.NewClaudeDesktop(opts...))
+			}
+		}
+	} else {
+		providers = append(providers, provider.NewClaudeDesktop())
+	}
+
 	// Built-in: Claude Cowork (local agent-mode sessions).
 	// If list_command is set, use it as an external provider instead.
 	if ca, ok := cfg.Providers["claude-cowork"]; ok {
@@ -1829,7 +1897,7 @@ func buildProviders(cfg config) []provider.Provider {
 	}
 
 	// External providers: anything in config that isn't a built-in name.
-	builtins := map[string]bool{"opencode": true, "claude": true, "claude-cowork": true}
+	builtins := map[string]bool{"opencode": true, "claude": true, "claude-desktop": true, "claude-cowork": true}
 	for name, pc := range cfg.Providers {
 		if builtins[name] || !pc.isEnabled() {
 			continue

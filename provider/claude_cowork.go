@@ -177,6 +177,9 @@ func (c *ClaudeCowork) parseMetadata(path string) (Session, bool) {
 		LastUsed:   lastUsed,
 		Directory:  directory,
 		SearchText: strings.Join(searchParts, " "),
+		// The app's own titles are good display names; titles derived from
+		// the initial message still benefit from LLM summarization.
+		CuratedTitle: meta.Title != "",
 	}, true
 }
 

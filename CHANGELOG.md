@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Add `claude-desktop` built-in provider for Claude Code sessions started in the desktop app — these never appear in `~/.claude/history.jsonl`, so they were invisible to sesh. Uses the app's own session names as display titles and resumes with `claude --resume` in the session's directory
+- Skip LLM summarization for sessions whose agent already wrote a real title (Claude Code Desktop and Cowork app-generated names) — the app's name is used as-is
+- Dedupe sessions that appear under both the `claude` and `claude-desktop` providers (a desktop session later resumed from the terminal)
 - Add `claude-cowork` built-in provider for Claude Cowork sessions (the desktop app's local agent-mode sessions), previously invisible to sesh
 - Fix TUI picker scrolling the prompt and first sessions off the top of the screen — multi-line titles (a Claude session's raw first prompt, which can span several lines) now collapse to a single line, and every rendered line is clamped to the terminal width so nothing wraps
 - Clamp the help bar and prompt line to the terminal width, and fall back to the list-only view when the terminal is too narrow for a usable detail pane

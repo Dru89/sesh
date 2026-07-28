@@ -211,8 +211,15 @@ func (c *Claude) ResumeCommand(session Session) string {
 // prompts and assistant responses. Reads the session transcript file and
 // extracts both user and assistant message content.
 func (c *Claude) SessionText(ctx context.Context, sessionID string) string {
+	return transcriptTextFromProjects(c.baseDir, sessionID)
+}
+
+// transcriptTextFromProjects finds <claudeDir>/projects/*/<sessionID>.jsonl and
+// extracts its conversation text. Shared by the Claude and ClaudeDesktop
+// providers, which both read the same transcript store.
+func transcriptTextFromProjects(claudeDir, sessionID string) string {
 	// Find the transcript file by scanning project directories.
-	projectsDir := filepath.Join(c.baseDir, "projects")
+	projectsDir := filepath.Join(claudeDir, "projects")
 	dirs, err := os.ReadDir(projectsDir)
 	if err != nil {
 		return ""
@@ -231,9 +238,9 @@ func (c *Claude) SessionText(ctx context.Context, sessionID string) string {
 }
 
 // extractConversationText reads a session JSONL and pulls both user and
-// assistant message text in conversation order. Shared by the Claude and
-// ClaudeCowork providers, which both write/read the same transcript line
-// shape: {"message": {"role": ..., "content": ...}}.
+// assistant message text in conversation order. Shared by the Claude,
+// ClaudeDesktop, and ClaudeCowork providers, which all write/read the same
+// transcript line shape: {"message": {"role": ..., "content": ...}}.
 func extractConversationText(path string) string {
 	f, err := os.Open(path)
 	if err != nil {

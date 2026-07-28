@@ -734,6 +734,9 @@ func TestBuildProvidersDefault(t *testing.T) {
 	if !contains(names, "claude") {
 		t.Error("expected claude provider")
 	}
+	if !contains(names, "claude-desktop") {
+		t.Error("expected claude-desktop provider")
+	}
 	if !contains(names, "claude-cowork") {
 		t.Error("expected claude-cowork provider")
 	}
@@ -748,6 +751,10 @@ func TestBuildProvidersDefault(t *testing.T) {
 		case "claude":
 			if _, ok := p.(*provider.Claude); !ok {
 				t.Errorf("claude should be *provider.Claude, got %T", p)
+			}
+		case "claude-desktop":
+			if _, ok := p.(*provider.ClaudeDesktop); !ok {
+				t.Errorf("claude-desktop should be *provider.ClaudeDesktop, got %T", p)
 			}
 		case "claude-cowork":
 			if _, ok := p.(*provider.ClaudeCowork); !ok {
@@ -876,6 +883,84 @@ func TestBuildProvidersClaudeCoworkDisabled(t *testing.T) {
 	providers := buildProviders(cfg)
 	if contains(providerNames(providers), "claude-cowork") {
 		t.Error("claude-cowork should be disabled")
+	}
+}
+
+func TestBuildProvidersClaudeDesktopDisabled(t *testing.T) {
+	disabled := false
+	cfg := config{
+		Providers: map[string]providerConfig{
+			"claude-desktop": {Enabled: &disabled},
+		},
+	}
+	providers := buildProviders(cfg)
+	if contains(providerNames(providers), "claude-desktop") {
+		t.Error("claude-desktop should be disabled")
+	}
+}
+
+// --- dedupeSessions tests ---
+
+func TestDedupeSessionsDesktopWinsOverClaude(t *testing.T) {
+	older := time.Now().Add(-time.Hour)
+	newer := time.Now()
+
+	// Same session ID from both providers — the desktop app session was
+	// resumed in the terminal, so it shows up in history.jsonl too.
+	sessions := []provider.Session{
+		{Agent: "claude", ID: "shared-id", Title: "raw first prompt", LastUsed: newer, SearchText: "raw first prompt"},
+		{Agent: "claude-desktop", ID: "shared-id", Title: "Fix login redirect loop", LastUsed: older, SearchText: "Fix login redirect loop"},
+		{Agent: "opencode", ID: "other-id", Title: "Unrelated", LastUsed: older},
+	}
+
+	out := dedupeSessions(sessions)
+	if len(out) != 2 {
+		t.Fatalf("expected 2 sessions after dedup, got %d", len(out))
+	}
+
+	var merged provider.Session
+	for _, s := range out {
+		if s.ID == "shared-id" {
+			merged = s
+		}
+	}
+	if merged.Agent != "claude-desktop" {
+		t.Errorf("agent = %q, want claude-desktop (curated title wins)", merged.Agent)
+	}
+	if !merged.LastUsed.Equal(newer) {
+		t.Errorf("LastUsed = %v, want the later timestamp %v", merged.LastUsed, newer)
+	}
+	if !strings.Contains(merged.SearchText, "raw first prompt") {
+		t.Errorf("SearchText = %q, want it to keep the dropped entry's search corpus", merged.SearchText)
+	}
+}
+
+func TestDedupeSessionsDesktopWinsRegardlessOfOrder(t *testing.T) {
+	// Provider collection order is nondeterministic (goroutines), so the
+	// desktop entry must win whether it arrives first or second.
+	now := time.Now()
+	sessions := []provider.Session{
+		{Agent: "claude-desktop", ID: "shared-id", Title: "App title", LastUsed: now},
+		{Agent: "claude", ID: "shared-id", Title: "raw prompt", LastUsed: now},
+	}
+	out := dedupeSessions(sessions)
+	if len(out) != 1 {
+		t.Fatalf("expected 1 session after dedup, got %d", len(out))
+	}
+	if out[0].Agent != "claude-desktop" {
+		t.Errorf("agent = %q, want claude-desktop", out[0].Agent)
+	}
+}
+
+func TestDedupeSessionsNoCollisionsPassThrough(t *testing.T) {
+	sessions := []provider.Session{
+		{Agent: "claude", ID: "a", LastUsed: time.Now()},
+		{Agent: "opencode", ID: "b", LastUsed: time.Now()},
+		{Agent: "claude-desktop", ID: "c", LastUsed: time.Now()},
+	}
+	out := dedupeSessions(sessions)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 sessions, got %d", len(out))
 	}
 }
 
