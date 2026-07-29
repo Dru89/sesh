@@ -25,8 +25,9 @@ type Cache struct {
 	entries map[string]Entry // keyed by session ID
 }
 
-// NewCache loads or creates the summary cache.
-func NewCache() *Cache {
+// cacheDir returns the directory sesh stores its cache files in. Shared by the
+// summary cache and the index health record so they always live side by side.
+func cacheDir() string {
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, ".cache", "sesh")
 	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
@@ -40,8 +41,13 @@ func NewCache() *Cache {
 			}
 		}
 	}
+	return dir
+}
+
+// NewCache loads or creates the summary cache.
+func NewCache() *Cache {
 	c := &Cache{
-		path:    filepath.Join(dir, "summaries.json"),
+		path:    filepath.Join(cacheDir(), "summaries.json"),
 		entries: make(map[string]Entry),
 	}
 	c.load()

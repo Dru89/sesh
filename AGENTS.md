@@ -284,8 +284,10 @@ sesh/
 │   ├── claude_cowork.go         # Claude Cowork adapter — reads Cowork session metadata + transcripts (desktop app userData dir)
 │   └── external.go           # External provider — shells out to user-defined command, parses JSON
 ├── summary/
-│   ├── cache.go              # JSON file cache at ~/.cache/sesh/summaries.json
+│   ├── cache.go              # JSON file cache at ~/.cache/sesh/summaries.json, shared cacheDir()
 │   ├── cache_test.go         # Tests: Get/Put, staleness, NeedsSummary, Save/load
+│   ├── health.go             # Generation health record at ~/.cache/sesh/index-health.json
+│   ├── health_test.go        # Tests: RecordRun increment/reset, threshold, roundtrip, CondenseError
 │   ├── generate.go           # LLM command execution, summary generation, RunLLM shared function
 │   └── generate_test.go      # Tests: RunLLM success/failure/timeout, Generate, GenerateBatch
 ├── update/
@@ -421,7 +423,8 @@ Any executable that outputs `[{"id", "title", "created", "last_used", ...}]` to 
 #### Architecture
 
 - `summary/cache.go` — JSON-file-backed cache at `~/.cache/sesh/summaries.json`. Keyed by session ID. Display and regeneration are decoupled: `Get()` returns a cached summary whenever one exists (a stale summary is a better display title than the raw, often multi-line first prompt), while `NeedsSummary()` flags entries for regeneration when `last_used` has changed AND the summary is >1 hour old (prevents re-summarizing active sessions on every run).
-- `summary/generate.go` — Shells out to user-configured command. Session text (user prompts) goes on stdin, summary comes out on stdout. 30-second per-summary timeout. Supports batch generation with progress callback. All LLM prompts are assembled by `BuildPrompt()`, which layers a system prompt (role framing), transcript, and task prompt, with support for `{{TRANSCRIPT}}` template expansion in custom prompts.
+- `summary/generate.go` — Shells out to user-configured command. Session text (user prompts) goes on stdin, summary comes out on stdout. 30-second per-summary timeout. Supports batch generation with progress callback. All LLM prompts are assembled by `BuildPrompt()`, which layers a system prompt (role framing), transcript, and task prompt, with support for `{{TRANSCRIPT}}` template expansion in custom prompts. `GenerateBatch` makes one independent LLM call per session — there is no multi-session prompt here, so summaries cannot bleed into each other (the multi-session prompt lives in `aiFilterSessions`, where cross-session reasoning is the point).
+- `summary/health.go` — JSON record at `~/.cache/sesh/index-health.json` tracking whether generation actually works. `RecordRun(attempted, succeeded, firstErr, command)` increments a counter when every attempted summary in a run failed and resets it on any success; `Failing()` reports once the counter reaches `FailureHintThreshold` (3). Empty runs are ignored so "nothing to summarize" is not read as evidence either way.
 - `cmd/sesh/main.go` — Wires it together. `sesh index` for bulk generation. Normal `sesh` runs lazy background generation (up to 10 sessions) in a goroutine during the TUI picker.
 
 #### Provider.SessionText()
@@ -485,9 +488,18 @@ Time parsing (`parseDateish`) supports: ISO dates (`2026-04-01`), relative days 
 
 Uses `summary.RunLLM()` with a 60-second timeout (longer than the 30-second per-summary timeout since the recap prompt is larger).
 
-### Cache warming
+### Cache warming and failure reporting
 
-The main picker shows a hint to stderr when >20 sessions lack summaries and an LLM command is configured: `sesh: N sessions without summaries. Run 'sesh index' to generate them.` This only appears once the user has set up an LLM command but hasn't run the initial index yet.
+The main picker writes one of two stderr hints, both gated on an LLM command being configured. They are mutually exclusive, and which one fires depends on `summary.Health`:
+
+- **Generation is healthy** and >20 sessions lack summaries: `sesh: N sessions without summaries. Run 'sesh index' to generate them.` The user has set up an LLM command but hasn't run the initial index yet.
+- **Generation is failing** (`Health.Failing()`, i.e. 3+ consecutive runs where every summary failed): the failure hint, carrying the condensed error and the command that produced it.
+
+The failure hint takes precedence — pointing someone at `sesh index` when indexing is what's broken sends them in a circle.
+
+Reporting is deferred by necessity. `lazyIndex` runs in a goroutine underneath the bubbletea alt screen and has nowhere to print, so it records the run outcome to `Health` and a **later** sesh run surfaces it. This mirrors how `checkVersionBackground` defers update notices through its own cache. The distinction that makes this worth doing: a single failed run is usually transient (rate limit, timeout on one long transcript) and resolves on its own, while repeated total failure means a broken command that never will — and before this existed, the latter was indistinguishable from having no LLM configured.
+
+`sesh index` records to the same `Health` record, so a successful index clears a stale failure hint. It also collapses repeated identical errors, printing each distinct error once as it first appears and rolling up counts at the end.
 
 ### Raycast extension
 

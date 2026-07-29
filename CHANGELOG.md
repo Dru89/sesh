@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Report persistent summary-generation failures instead of swallowing them. Background indexing runs under the TUI and previously discarded every error, so a broken LLM command (retired model ID, expired credentials, renamed binary) left the picker silently never improving — indistinguishable from having no LLM configured at all. Repeated total failures are now recorded and surfaced on a later run, along with the underlying error and the command that produced it
+- Suppress the "run `sesh index`" hint while generation is failing, so the suggested next step isn't the thing that's broken
+- Collapse repeated identical errors in `sesh index` output — a broken command fails the same way for every session, and printing it hundreds of times buried the one line that mattered
+
 ## [2.1.0] - 2026-07-28
 
 - Hide command-only Claude Code sessions — opening claude just to run `/login` or `/model` no longer leaves a junk entry in the picker. Sessions whose history is all commands are checked against their transcript first, so sessions started with an initial prompt argument (`claude "..."`) are kept

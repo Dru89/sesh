@@ -449,16 +449,36 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Cache warming hint: if many sessions lack summaries and an LLM is configured.
+	// Summary generation hints. Both need a configured LLM command; which one
+	// fires depends on whether generation is actually working. They are
+	// mutually exclusive on purpose — telling someone to run 'sesh index' when
+	// indexing is the thing that's broken sends them in a circle, so the
+	// failure hint takes precedence.
+	var health *summary.Health
 	if cfg.hasAnyCommand() {
-		unsummarized := 0
-		for _, s := range all {
-			if s.Summary == "" && s.SearchText != "" && !s.CuratedTitle {
-				unsummarized++
+		health = summary.NewHealth()
+		if health.Failing() {
+			fmt.Fprintf(os.Stderr, "sesh: summary generation has failed %d times running.\n",
+				health.ConsecutiveFailedRuns())
+			if msg := health.LastError(); msg != "" {
+				fmt.Fprintf(os.Stderr, "sesh:   last error: %s\n", msg)
 			}
-		}
-		if unsummarized > 20 {
-			fmt.Fprintf(os.Stderr, "sesh: %d sessions without summaries. Run 'sesh index' to generate them.\n", unsummarized)
+			if c := health.LastCommand(); len(c) > 0 {
+				fmt.Fprintf(os.Stderr, "sesh:   command: %s\n", strings.Join(c, " "))
+			}
+			fmt.Fprintf(os.Stderr, "sesh:   check the LLM command in ~/.config/sesh/config.json\n")
+		} else {
+			// Cache warming hint: many sessions lack summaries but generation
+			// looks healthy, so the user just hasn't run the initial index.
+			unsummarized := 0
+			for _, s := range all {
+				if s.Summary == "" && s.SearchText != "" && !s.CuratedTitle {
+					unsummarized++
+				}
+			}
+			if unsummarized > 20 {
+				fmt.Fprintf(os.Stderr, "sesh: %d sessions without summaries. Run 'sesh index' to generate them.\n", unsummarized)
+			}
 		}
 	}
 
@@ -467,7 +487,7 @@ func main() {
 
 	// Kick off lazy background summary generation for unsummarized sessions.
 	if cfg.hasAnyCommand() {
-		go lazyIndex(ctx, cfg.summaryConfig(), cache, all, providers)
+		go lazyIndex(ctx, cfg.summaryConfig(), cache, health, all, providers)
 	}
 
 	// Run the TUI picker.
@@ -604,11 +624,30 @@ func runIndex(args []string) {
 		fmt.Fprintf(os.Stderr, "Generating summaries for %d/%d sessions...\n", len(items), len(all))
 	}
 
+	// A broken command fails identically for every session, so printing the
+	// same error hundreds of times buries the one line that matters. Print each
+	// distinct error once as it first appears, then roll up the counts at the
+	// end.
+	var (
+		distinct  []string       // in first-seen order
+		errCounts map[string]int // condensed error -> occurrences
+		firstErr  error
+	)
+	errCounts = make(map[string]int)
+
 	gen := summary.NewGenerator(cfg.summaryConfig())
 	succeeded := gen.GenerateBatch(ctx, items, cache, func(i, total int, id string, err error) {
 		if err != nil {
-			// Clear the progress line, print error, then continue progress below.
-			fmt.Fprintf(os.Stderr, "\r\033[K\033[31m  [%d/%d] %s: %v\033[0m\n", i, total, id, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			msg := summary.CondenseError(err.Error())
+			errCounts[msg]++
+			if errCounts[msg] == 1 {
+				distinct = append(distinct, msg)
+				// Clear the progress line, print error, then continue progress below.
+				fmt.Fprintf(os.Stderr, "\r\033[K\033[31m  [%d/%d] %s: %s\033[0m\n", i, total, id, msg)
+			}
 		}
 		fmt.Fprintf(os.Stderr, "\r\033[K  [%d/%d] Generating summaries...", i, total)
 	})
@@ -619,13 +658,44 @@ func runIndex(args []string) {
 		fmt.Fprintf(os.Stderr, "sesh: warning: failed to save cache: %v\n", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Generated %d summaries (%d failed).\n", succeeded, len(items)-succeeded)
+	// Record the outcome so a persistent failure surfaces on later runs, and so
+	// a successful index clears a stale failure hint. A run that attempted
+	// nothing is not evidence either way, so skip it entirely rather than
+	// rewriting the record with unchanged state.
+	if len(items) > 0 {
+		health := summary.NewHealth()
+		indexCmd, _ := cfg.indexCommand()
+		health.RecordRun(len(items), succeeded, firstErr, indexCmd)
+		if err := health.Save(); err != nil {
+			fmt.Fprintf(os.Stderr, "sesh: warning: failed to save index health: %v\n", err)
+		}
+	}
+
+	failed := len(items) - succeeded
+	fmt.Fprintf(os.Stderr, "Generated %d summaries (%d failed).\n", succeeded, failed)
+	if failed > 0 {
+		for _, msg := range distinct {
+			if n := errCounts[msg]; n > 1 {
+				fmt.Fprintf(os.Stderr, "  \033[31m%d× %s\033[0m\n", n, msg)
+			}
+		}
+		if succeeded == 0 {
+			fmt.Fprintf(os.Stderr, "  Every summary failed — check the LLM command in ~/.config/sesh/config.json\n")
+		}
+	}
 }
 
 // lazyIndex generates summaries for unsummarized sessions in the background.
 // It runs during the TUI picker and saves results to the cache.
-// Errors are silently ignored — the user will see summaries next time.
-func lazyIndex(ctx context.Context, cfg summary.Config, cache *summary.Cache, sessions []provider.Session, providers []provider.Provider) {
+//
+// Failures are recorded to the health record rather than reported directly:
+// this runs in a goroutine underneath the alt screen, so it has nowhere to
+// print. A later run reads the record and surfaces anything persistent. The
+// outcome must be recorded rather than dropped — "the user will see summaries
+// next time" only holds for transient failures, and the failures worth telling
+// someone about (retired model ID, expired credentials, renamed binary) never
+// resolve on their own.
+func lazyIndex(ctx context.Context, cfg summary.Config, cache *summary.Cache, health *summary.Health, sessions []provider.Session, providers []provider.Provider) {
 	providerMap := providersByName(providers)
 
 	var refs []summary.SessionRef
@@ -674,8 +744,14 @@ func lazyIndex(ctx context.Context, cfg summary.Config, cache *summary.Cache, se
 		})
 	}
 
+	// Record and persist as each result lands, not after the batch: this
+	// goroutine is routinely killed when the user picks a session, often
+	// sooner than one summary takes to produce.
 	gen := summary.NewGenerator(cfg)
-	gen.GenerateBatch(ctx, items, cache, nil)
+	rec := summary.NewRunRecorder(health, cfg.Command)
+	gen.GenerateBatch(ctx, items, cache, func(i, total int, id string, err error) {
+		rec.Observe(err)
+	})
 }
 
 // runRecap handles the `sesh recap` subcommand.
