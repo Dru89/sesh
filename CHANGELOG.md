@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fix the summarizer being told to read the transcript in the wrong place. The `index`, `ask`, and `recap` task prompts all said the session data was "below" them, but it is placed above — so the model would sometimes look, find only instructions, and answer that no transcript was provided. Affected every configured LLM command, not just one
+
 - Stop generated summaries from overriding real session names. Claude Code Desktop and Cowork sessions carry a name the app generated or the user typed, and a cached summary silently displaced it — summarization skipped these sessions, but nothing stopped an already-cached summary from being shown over the title. This also means renaming a session in the desktop app now shows up in sesh on the next run
 
 - Report persistent summary-generation failures instead of swallowing them. Background indexing runs under the TUI and previously discarded every error, so a broken LLM command (retired model ID, expired credentials, renamed binary) left the picker silently never improving — indistinguishable from having no LLM configured at all. Repeated total failures are now recorded and surfaced on a later run, along with the underlying error and the command that produced it
