@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-07-28
+
 - Hide command-only Claude Code sessions — opening claude just to run `/login` or `/model` no longer leaves a junk entry in the picker. Sessions whose history is all commands are checked against their transcript first, so sessions started with an initial prompt argument (`claude "..."`) are kept
 - Title Claude Code sessions by their first real prompt instead of their first history entry, so a session that starts with `/model` is no longer titled "/model"
 - Exclude slash-command execution records from session text sent to the summarizer
@@ -142,7 +144,8 @@ Initial release.
 - LLM fallback chains across subcommands
 - Shell wrapper for in-shell session resumption
 
-[Unreleased]: https://github.com/dru89/sesh/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/dru89/sesh/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/dru89/sesh/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/dru89/sesh/compare/v1.1.1...v2.0.0
 [1.1.1]: https://github.com/dru89/sesh/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/dru89/sesh/compare/v1.0.0...v1.1.0
