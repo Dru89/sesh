@@ -60,7 +60,7 @@ type healthState struct {
 
 // NewHealth loads or creates the index health record.
 func NewHealth() *Health {
-	h := &Health{path: filepath.Join(cacheDir(), "index-health.json")}
+	h := &Health{path: filepath.Join(CacheDir(), "index-health.json")}
 	h.load()
 	return h
 }
