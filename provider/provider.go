@@ -63,6 +63,15 @@ func (s Session) DisplayTitle() string {
 	}
 }
 
+// IsCommandInput reports whether a user input line is a CLI command rather
+// than a real prompt — a shell escape ("!ls") or a slash command ("/model").
+// Sessions containing nothing but command inputs (someone opening an agent
+// just to run /login) aren't resumable work, so providers skip them when
+// listing and when extracting session text.
+func IsCommandInput(s string) bool {
+	return strings.HasPrefix(s, "!") || strings.HasPrefix(s, "/")
+}
+
 // FlattenWhitespace collapses every run of whitespace (spaces, tabs, newlines)
 // into a single space and trims the ends. Display titles must be a single line:
 // a value containing newlines renders across multiple terminal rows, which

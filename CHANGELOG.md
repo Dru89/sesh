@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Hide command-only Claude Code sessions — opening claude just to run `/login` or `/model` no longer leaves a junk entry in the picker. Sessions whose history is all commands are checked against their transcript first, so sessions started with an initial prompt argument (`claude "..."`) are kept
+- Title Claude Code sessions by their first real prompt instead of their first history entry, so a session that starts with `/model` is no longer titled "/model"
+- Exclude slash-command execution records from session text sent to the summarizer
+
 ## [2.0.0] - 2026-07-28
 
 - **Breaking:** rename the `claude` provider to `claude-code` for clarity next to the other Claude surfaces. The `claude` config key still works as a deprecated alias, but the `agent` name in output (JSON, list, stats) is now `claude-code`
