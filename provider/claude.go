@@ -62,11 +62,12 @@ func (c *Claude) ListSessions(ctx context.Context) ([]Session, error) {
 
 	// Group entries by session ID.
 	type sessionInfo struct {
-		firstDisplay string
-		project      string
-		firstTime    int64
-		lastTime     int64
-		prompts      []string
+		firstReal     string // earliest real prompt (not a slash/shell command)
+		firstRealTime int64
+		project       string
+		firstTime     int64
+		lastTime      int64
+		prompts       []string
 	}
 	grouped := make(map[string]*sessionInfo)
 
@@ -81,24 +82,27 @@ func (c *Claude) ListSessions(ctx context.Context) ([]Session, error) {
 		info, exists := grouped[entry.SessionID]
 		if !exists {
 			info = &sessionInfo{
-				firstDisplay: entry.Display,
-				project:      entry.Project,
-				firstTime:    entry.Timestamp,
-				lastTime:     entry.Timestamp,
+				project:   entry.Project,
+				firstTime: entry.Timestamp,
+				lastTime:  entry.Timestamp,
 			}
 			grouped[entry.SessionID] = info
 		}
 		if entry.Timestamp < info.firstTime {
 			info.firstTime = entry.Timestamp
-			info.firstDisplay = entry.Display
 		}
 		if entry.Timestamp > info.lastTime {
 			info.lastTime = entry.Timestamp
 		}
-		// Collect user prompts for search, skip shell commands and slash commands.
-		if entry.Display != "" &&
-			!strings.HasPrefix(entry.Display, "!") &&
-			!strings.HasPrefix(entry.Display, "/") {
+		// Track real prompts, skipping shell commands and slash commands.
+		// The earliest one becomes the title; a session with none is either
+		// junk (someone opening claude just to run /login) or was started
+		// with an initial prompt argument — resolved below.
+		if entry.Display != "" && !IsCommandInput(entry.Display) {
+			if info.firstReal == "" || entry.Timestamp < info.firstRealTime {
+				info.firstReal = entry.Display
+				info.firstRealTime = entry.Timestamp
+			}
 			if len(info.prompts) < 5 {
 				info.prompts = append(info.prompts, entry.Display)
 			}
@@ -110,7 +114,21 @@ func (c *Claude) ListSessions(ctx context.Context) ([]Session, error) {
 
 	var sessions []Session
 	for id, info := range grouped {
-		searchParts := []string{info.firstDisplay, info.project}
+		rawTitle := info.firstReal
+		if rawTitle == "" {
+			// History shows only commands for this session — but history only
+			// records interactively typed prompts, so a session started as
+			// `claude "do the thing"` looks command-only here while its
+			// transcript holds real work. Check the transcript before
+			// dropping: a real prompt there rescues the session (and titles
+			// it); none means command-only junk.
+			rawTitle = c.firstTranscriptPrompt(id)
+			if rawTitle == "" {
+				continue
+			}
+		}
+
+		searchParts := []string{rawTitle, info.project}
 		searchParts = append(searchParts, info.prompts...)
 		slug := slugs[id]
 		if slug != "" {
@@ -120,7 +138,7 @@ func (c *Claude) ListSessions(ctx context.Context) ([]Session, error) {
 		// The first prompt is often multi-line (pasted text, code blocks).
 		// Flatten it to a single line so the title doesn't render across
 		// multiple rows in the picker or wrap in `show`/`--json` output.
-		title := FlattenWhitespace(info.firstDisplay)
+		title := FlattenWhitespace(rawTitle)
 		if len(title) > 120 {
 			title = title[:117] + "..."
 		}
@@ -174,6 +192,79 @@ func (c *Claude) loadSlugs() map[string]string {
 		}
 	}
 	return slugs
+}
+
+// firstTranscriptPrompt scans the session's transcript for the earliest real
+// user prompt. Used for sessions whose history entries are all commands:
+// history.jsonl only records interactively typed input, so a session started
+// with an initial prompt argument has its real content only in the transcript.
+func (c *Claude) firstTranscriptPrompt(sessionID string) string {
+	projectsDir := filepath.Join(c.baseDir, "projects")
+	dirs, err := os.ReadDir(projectsDir)
+	if err != nil {
+		return ""
+	}
+	for _, dir := range dirs {
+		if !dir.IsDir() {
+			continue
+		}
+		path := filepath.Join(projectsDir, dir.Name(), sessionID+".jsonl")
+		if prompt := firstUserPrompt(path); prompt != "" {
+			return prompt
+		}
+	}
+	return ""
+}
+
+// firstUserPrompt reads a transcript JSONL and returns the first user message
+// that is a real typed prompt — not a meta entry, a command input, or the
+// transcript record of a slash command execution.
+func firstUserPrompt(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		var raw struct {
+			IsMeta  bool `json:"isMeta"`
+			Message struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &raw); err != nil {
+			continue
+		}
+		if raw.IsMeta || raw.Message.Role != "user" {
+			continue
+		}
+		var s string
+		if err := json.Unmarshal(raw.Message.Content, &s); err != nil {
+			continue
+		}
+		s = strings.TrimSpace(s)
+		if s == "" || IsCommandInput(s) || isCommandRecord(s) {
+			continue
+		}
+		return s
+	}
+	return ""
+}
+
+// isCommandRecord reports whether transcript user-message content is the
+// record of a slash command execution rather than a typed prompt. Claude Code
+// writes these as tagged blocks in user messages.
+func isCommandRecord(s string) bool {
+	for _, prefix := range []string{"<command-name>", "<local-command-stdout>", "<local-command-caveat>"} {
+		if strings.HasPrefix(s, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // extractSlug reads the first few lines of a session JSONL to find the slug.
@@ -337,8 +428,8 @@ func extractConversationText(path string) string {
 	for _, key := range order {
 		entry := messages[key]
 		if entry.role == "user" {
-			// Skip shell commands and slash commands.
-			if strings.HasPrefix(entry.text, "!") || strings.HasPrefix(entry.text, "/") {
+			// Skip command inputs and slash command execution records.
+			if IsCommandInput(entry.text) || isCommandRecord(entry.text) {
 				continue
 			}
 			parts = append(parts, "User: "+entry.text)

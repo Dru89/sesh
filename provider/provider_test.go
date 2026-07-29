@@ -461,3 +461,22 @@ func TestTruncateTail(t *testing.T) {
 		}
 	})
 }
+
+func TestIsCommandInput(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"/login", true},
+		{"/model haiku", true},
+		{"!ls -la", true},
+		{"fix the auth bug", false},
+		{"# Deploy Readiness Standard", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := IsCommandInput(c.in); got != c.want {
+			t.Errorf("IsCommandInput(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}

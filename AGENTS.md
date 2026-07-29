@@ -80,6 +80,7 @@ Rules for the script:
 - Output `[]` if no sessions exist
 - Only JSON goes to stdout; warnings and errors go to stderr
 - Exclude subagent/child sessions — only return top-level sessions a user would resume directly. Many agents spawn background sessions for subtasks (e.g., explore or code-review subagents). These shouldn't appear in the picker.
+- Exclude sessions with no real user input — someone opening the agent just to run a command like `/login` or `/model` didn't create resumable work. The built-in Claude Code provider skips sessions whose only content is slash/shell commands; external providers should apply the same standard.
 
 ### 2. A config entry
 
@@ -369,6 +370,8 @@ Resume: `opencode --session <id>` (binary at `~/.opencode/bin/opencode`)
 `~/.claude/history.jsonl` — one JSON line per user prompt, grouped by sessionId. Fields: display, timestamp (Unix ms), project (working directory), sessionId (UUID). Only prompts typed in a terminal land here — sessions started from the desktop app never do (see the `claude-code-desktop` provider below).
 
 Session transcripts live in `~/.claude/projects/<encoded-path>/<sessionId>.jsonl`. The path encoding replaces `/` with `-`. The `slug` field appears on messages after the first exchange.
+
+Command-only sessions are skipped: slash commands (`/login`, `/model`) and shell escapes (`!ls`) are logged to history like prompts, so a session whose entries are all commands is junk — unless it was started with an initial prompt argument (`claude "..."`), which never lands in history. `firstTranscriptPrompt()` checks the transcript for a real user message before dropping such a session, and that message becomes the title. The title is always the earliest *real* prompt (shared predicate: `provider.IsCommandInput()`); transcript command-execution records (`<command-name>`, `<local-command-stdout>`, `isMeta` entries) are excluded from titles and session text by `isCommandRecord()`.
 
 Resume: `claude --resume <id>` (binary at `~/.local/bin/claude`)
 

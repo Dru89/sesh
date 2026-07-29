@@ -296,6 +296,130 @@ func TestClaudeSlugExtraction(t *testing.T) {
 	t.Error("sess-1 not found")
 }
 
+func TestClaudeSkipsCommandOnlySessions(t *testing.T) {
+	baseDir := createTestClaudeData(t)
+
+	// Add a session whose only history entries are slash/shell commands and
+	// that has no transcript — the /login-style junk session.
+	now := time.Now().UnixMilli()
+	junk := fmt.Sprintf(`{"display":"/login","timestamp":%d,"project":"/home/user/project-a","sessionId":"sess-junk"}
+{"display":"/model","timestamp":%d,"project":"/home/user/project-a","sessionId":"sess-junk"}
+{"display":"!ls","timestamp":%d,"project":"/home/user/project-a","sessionId":"sess-junk"}
+`, now, now+1000, now+2000)
+	appendFile(t, filepath.Join(baseDir, "history.jsonl"), junk)
+
+	c := &Claude{baseDir: baseDir}
+	sessions, err := c.ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions failed: %v", err)
+	}
+	for _, s := range sessions {
+		if s.ID == "sess-junk" {
+			t.Error("command-only session with no transcript should be excluded")
+		}
+	}
+	if len(sessions) != 2 {
+		t.Errorf("expected 2 sessions, got %d", len(sessions))
+	}
+}
+
+func TestClaudeCommandFirstSessionTitledByRealPrompt(t *testing.T) {
+	baseDir := createTestClaudeData(t)
+
+	// A session that starts with /model but has a real prompt after it should
+	// be kept, titled by the real prompt rather than the command.
+	now := time.Now().UnixMilli()
+	mixed := fmt.Sprintf(`{"display":"/model","timestamp":%d,"project":"/home/user/project-c","sessionId":"sess-mixed"}
+{"display":"Explain the cache layer","timestamp":%d,"project":"/home/user/project-c","sessionId":"sess-mixed"}
+`, now, now+1000)
+	appendFile(t, filepath.Join(baseDir, "history.jsonl"), mixed)
+
+	c := &Claude{baseDir: baseDir}
+	sessions, err := c.ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions failed: %v", err)
+	}
+	for _, s := range sessions {
+		if s.ID == "sess-mixed" {
+			if s.Title != "Explain the cache layer" {
+				t.Errorf("title = %q, want the first real prompt, not the leading command", s.Title)
+			}
+			return
+		}
+	}
+	t.Error("sess-mixed not found — a session with real prompts must not be dropped")
+}
+
+func TestClaudeCommandOnlyHistoryRescuedByTranscript(t *testing.T) {
+	baseDir := createTestClaudeData(t)
+
+	// A session started as `claude "initial prompt"` has only commands in
+	// history (the argument prompt is never logged there), but its transcript
+	// holds the real conversation. It must be kept and titled from the
+	// transcript's first real user message.
+	now := time.Now().UnixMilli()
+	entry := fmt.Sprintf(`{"display":"/model","timestamp":%d,"project":"/home/user/project-a","sessionId":"sess-arg"}
+`, now)
+	appendFile(t, filepath.Join(baseDir, "history.jsonl"), entry)
+
+	transcript := `{"type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>Caveat: local commands</local-command-caveat>"},"uuid":"m1"}
+{"type":"user","message":{"role":"user","content":"<command-name>/model</command-name>"},"uuid":"c1"}
+{"type":"user","message":{"role":"user","content":"<local-command-stdout>Set model</local-command-stdout>"},"uuid":"c2"}
+{"type":"user","message":{"role":"user","content":"Ship the release notes for v3"},"uuid":"u1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"On it."}]},"uuid":"a1"}
+`
+	if err := os.WriteFile(filepath.Join(baseDir, "projects", "-home-user-project-a", "sess-arg.jsonl"), []byte(transcript), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &Claude{baseDir: baseDir}
+	sessions, err := c.ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions failed: %v", err)
+	}
+	for _, s := range sessions {
+		if s.ID == "sess-arg" {
+			if s.Title != "Ship the release notes for v3" {
+				t.Errorf("title = %q, want the transcript's first real prompt", s.Title)
+			}
+			return
+		}
+	}
+	t.Error("sess-arg not found — a command-only history session with a real transcript must be kept")
+}
+
+func TestExtractConversationTextSkipsCommandRecords(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "t.jsonl")
+	transcript := `{"type":"user","message":{"role":"user","content":"<command-name>/model</command-name>"},"uuid":"c1"}
+{"type":"user","message":{"role":"user","content":"real question"},"uuid":"u1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"real answer"}]},"uuid":"a1"}
+`
+	if err := os.WriteFile(path, []byte(transcript), 0644); err != nil {
+		t.Fatal(err)
+	}
+	text := extractConversationText(path)
+	if strings.Contains(text, "<command-name>") {
+		t.Errorf("session text should not contain command records: %q", text)
+	}
+	if !strings.Contains(text, "real question") || !strings.Contains(text, "real answer") {
+		t.Errorf("session text missing real conversation: %q", text)
+	}
+}
+
+// appendFile appends content to an existing file.
+func appendFile(t *testing.T, path, content string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(content); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestClaudeResumeCommand(t *testing.T) {
 	c := &Claude{}
 	s := Session{ID: "abc-123", Directory: "/home/user/project"}
