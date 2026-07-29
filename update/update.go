@@ -15,6 +15,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/dru89/sesh/internal/paths"
 )
 
 const (
@@ -336,13 +338,16 @@ func extractFromZip(f *os.File) ([]byte, error) {
 	return nil, fmt.Errorf("sesh binary not found in zip")
 }
 
+// cachePath is the version-check record, resolved through the shared helper so
+// it lands beside the summary cache rather than in a directory of its own.
+//
+// This used to compute its own path without the Windows fallback, and the
+// MkdirAll in SaveCache then created ~/.cache/sesh — the directory
+// summary.CacheDir probed for. A Windows user's summaries were written to
+// %LOCALAPPDATA% on one run and looked for in ~/.cache on the next, so they
+// silently vanished and had to be regenerated.
 func cachePath() string {
-	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, ".cache", "sesh")
-	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
-		dir = filepath.Join(xdg, "sesh")
-	}
-	return filepath.Join(dir, "version-check.json")
+	return filepath.Join(paths.Cache(), "version-check.json")
 }
 
 // compareSemver compares two semver strings (without v prefix).

@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/dru89/sesh/internal/paths"
 )
 
 func TestIsNewer(t *testing.T) {
@@ -270,4 +272,24 @@ func containsStr(s, sub string) bool {
 		}
 		return false
 	}())
+}
+
+// TestCachePathSitsBesideTheSummaryCache pins the fix for a Windows bug: this
+// package used to compute its own cache directory without the Windows fallback,
+// and SaveCache's MkdirAll then created ~/.cache/sesh — the directory
+// summary.CacheDir probed for. Summaries were written to %LOCALAPPDATA% on one
+// run and looked for in ~/.cache on the next, so they silently vanished.
+func TestCachePathSitsBesideTheSummaryCache(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", dir)
+
+	got := cachePath()
+
+	if want := filepath.Join(paths.Cache(), "version-check.json"); got != want {
+		t.Errorf("cachePath() = %q, want %q", got, want)
+	}
+	if filepath.Dir(got) != paths.Cache() {
+		t.Errorf("version check lives in %q, want it in the shared cache dir %q",
+			filepath.Dir(got), paths.Cache())
+	}
 }

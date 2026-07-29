@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"time"
+
+	"github.com/dru89/sesh/internal/paths"
 )
 
 // Entry is a cached summary for a single session.
@@ -25,32 +26,10 @@ type Cache struct {
 	entries map[string]Entry // keyed by session ID
 }
 
-// CacheDir returns the directory sesh stores its cache files in. Shared by the
-// summary cache and the index health record so they always live side by side.
-//
-// XDG_CACHE_HOME is honored first and unconditionally. It used to be applied
-// before the Windows fallback below, which then overrode it whenever the
-// directory did not happen to exist yet — so a Windows user who set the
-// variable got %LOCALAPPDATA% anyway, and their cache silently relocated the
-// moment the directory was created. An explicit setting should beat a
-// heuristic, and it should not depend on whether a directory exists.
+// CacheDir returns the directory sesh stores its cache files in. Every caller
+// in the module resolves it through internal/paths so they cannot disagree.
 func CacheDir() string {
-	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
-		return filepath.Join(xdg, "sesh")
-	}
-
-	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, ".cache", "sesh")
-
-	// On Windows, prefer %LOCALAPPDATA%\sesh if ~/.cache doesn't exist.
-	if runtime.GOOS == "windows" {
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
-				dir = filepath.Join(localAppData, "sesh")
-			}
-		}
-	}
-	return dir
+	return paths.Cache()
 }
 
 // NewCache loads or creates the summary cache.
