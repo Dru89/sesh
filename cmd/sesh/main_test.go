@@ -999,6 +999,77 @@ func TestDedupeSessionsNoCollisionsPassThrough(t *testing.T) {
 	}
 }
 
+// newTestSummaryCache returns a cache rooted in a temp dir so tests never read
+// or write the developer's real ~/.cache/sesh/summaries.json.
+func newTestSummaryCache(t *testing.T) *summary.Cache {
+	t.Helper()
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	return summary.NewCache()
+}
+
+// TestApplySummariesSkipsCuratedTitles covers the display half of the curated
+// title rule. Generation already skips these sessions, but a cache entry can
+// outlive that: it may predate the CuratedTitle flag, or have been generated
+// for the same ID under a different provider. Attaching it would override a
+// name the agent or user chose.
+func TestApplySummariesSkipsCuratedTitles(t *testing.T) {
+	cache := newTestSummaryCache(t)
+	now := time.Now()
+	cache.Put("curated-id", "Built auth middleware", now)
+	cache.Put("plain-id", "Refactored the parser", now)
+
+	sessions := []provider.Session{
+		{ID: "curated-id", Title: "gdocs-sync empty results bug", CuratedTitle: true, LastUsed: now, SearchText: "orig"},
+		{ID: "plain-id", Title: "raw first prompt", LastUsed: now, SearchText: "orig"},
+	}
+
+	applySummaries(sessions, cache)
+
+	if sessions[0].Summary != "" {
+		t.Errorf("curated session got summary %q, want none", sessions[0].Summary)
+	}
+	if sessions[0].SearchText != "orig" {
+		t.Errorf("curated session SearchText = %q, want it left alone", sessions[0].SearchText)
+	}
+	if got := sessions[0].DisplayTitle(); got != "gdocs-sync empty results bug" {
+		t.Errorf("DisplayTitle() = %q, want the curated title", got)
+	}
+
+	// Regression guard: ordinary sessions must still be enriched.
+	if sessions[1].Summary != "Refactored the parser" {
+		t.Errorf("plain session summary = %q, want it applied", sessions[1].Summary)
+	}
+	if !strings.Contains(sessions[1].SearchText, "Refactored the parser") {
+		t.Errorf("plain session SearchText = %q, want the summary appended", sessions[1].SearchText)
+	}
+}
+
+// TestApplySummariesAfterDedupeKeepsDesktopTitle covers the interaction that
+// makes this reachable in normal use, not just from a legacy cache. A desktop
+// session resumed in the terminal is eligible for summarization under
+// claude-code (CuratedTitle is false there), and the resulting summary is keyed
+// by a session ID both entries share. dedupeSessions keeps the desktop entry,
+// so without the guard that summary lands on it and masks the app's name.
+func TestApplySummariesAfterDedupeKeepsDesktopTitle(t *testing.T) {
+	cache := newTestSummaryCache(t)
+	now := time.Now()
+	cache.Put("shared-id", "Fix session token nil check", now)
+
+	sessions := dedupeSessions([]provider.Session{
+		{Agent: "claude-code", ID: "shared-id", Title: "fix the auth bug", LastUsed: now},
+		{Agent: "claude-code-desktop", ID: "shared-id", Title: "Login redirect loop", CuratedTitle: true, LastUsed: now},
+	})
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session after dedup, got %d", len(sessions))
+	}
+
+	applySummaries(sessions, cache)
+
+	if got := sessions[0].DisplayTitle(); got != "Login redirect loop" {
+		t.Errorf("DisplayTitle() = %q, want the desktop app's name", got)
+	}
+}
+
 func providerNames(providers []provider.Provider) []string {
 	var names []string
 	for _, p := range providers {

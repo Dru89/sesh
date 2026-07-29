@@ -20,10 +20,16 @@ type Session struct {
 	Directory  string    `json:"directory,omitempty"`
 	SearchText string    `json:"-"`
 
-	// CuratedTitle marks the title as agent-authored — e.g. the desktop
-	// app's generated session names — rather than a raw first prompt.
-	// Curated titles are already good display names, so summary generation
-	// (sesh index, lazy indexing) skips these sessions.
+	// CuratedTitle marks the title as a real name rather than a raw first
+	// prompt — the desktop app's generated session names, or a name the user
+	// typed themselves. Curated titles are already good display names, so
+	// summary generation (sesh index, lazy indexing) skips these sessions and
+	// DisplayTitle prefers the title over any summary.
+	//
+	// The display half matters independently of the generation half: a summary
+	// cached before this flag existed, or generated for the same session ID
+	// under a different provider (see dedupeSessions), would otherwise
+	// permanently override a name the agent or user chose.
 	CuratedTitle bool `json:"-"`
 }
 
@@ -46,12 +52,21 @@ type Provider interface {
 }
 
 // DisplayTitle returns the best available display title for a session.
-// Prefers a generated summary over the raw title when available. The result is
-// always a single line — raw titles (e.g. a Claude session's first prompt) can
-// span multiple lines, which would render across several rows and break the
-// TUI list layout, so any embedded newlines are collapsed to spaces.
+//
+// A curated title wins outright: when the agent or the user gave the session a
+// real name, that name beats anything we could generate, and re-reading it from
+// the provider on every run is also how a rename in the desktop app propagates.
+// Otherwise a generated summary beats the raw title, which is usually just the
+// first prompt.
+//
+// The result is always a single line — raw titles (e.g. a Claude session's
+// first prompt) can span multiple lines, which would render across several rows
+// and break the TUI list layout, so any embedded newlines are collapsed to
+// spaces.
 func (s Session) DisplayTitle() string {
 	switch {
+	case s.CuratedTitle && s.Title != "":
+		return FlattenWhitespace(s.Title)
 	case s.Summary != "":
 		return FlattenWhitespace(s.Summary)
 	case s.Title != "":
