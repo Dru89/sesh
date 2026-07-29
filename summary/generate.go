@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dru89/sesh/provider"
@@ -53,6 +54,11 @@ type Config struct {
 	// Env is the merged environment for the command. If nil, the command
 	// inherits the parent process environment.
 	Env []string `json:"-"`
+
+	// Concurrency is how many summaries GenerateBatch produces in parallel.
+	// Zero or negative means DefaultBatchConcurrency. Lower it if the
+	// configured command shares a rate limit that parallel calls exhaust.
+	Concurrency int `json:"concurrency,omitempty"`
 }
 
 // IsEnabled returns true if summary generation is configured.
@@ -94,24 +100,90 @@ func (g *Generator) Generate(ctx context.Context, sessionText string) (string, e
 	return result, nil
 }
 
-// GenerateBatch generates summaries for multiple sessions, calling the
-// progress callback after each one. Returns the number of successful
-// summaries generated.
-func (g *Generator) GenerateBatch(ctx context.Context, items []BatchItem, cache *Cache, progress func(i, total int, id string, err error)) int {
-	succeeded := 0
-	for i, item := range items {
-		if ctx.Err() != nil {
-			break
-		}
-		summary, err := g.Generate(ctx, item.Text)
-		if err == nil {
-			cache.Put(item.ID, summary, item.LastUsed)
-			succeeded++
-		}
-		if progress != nil {
-			progress(i+1, len(items), item.ID, err)
+// DefaultBatchConcurrency is how many summaries are generated in parallel when
+// the config doesn't say otherwise.
+//
+// Batch generation was serial, which was invisible when the assumed command was
+// something like `llm -m haiku` at well under a second per call. An agent CLI
+// boots a whole harness per invocation and takes 5-10 seconds, which turns a
+// few hundred sessions into half an hour. Four is deliberately modest: these
+// are concurrent processes billing against one account, and the ceiling worth
+// respecting is the provider's rate limit rather than the local core count.
+const DefaultBatchConcurrency = 4
+
+// GenerateBatch generates summaries for multiple sessions, calling the progress
+// callback as each one finishes. Returns the number of successful summaries.
+//
+// Each session is summarized by its own process from its own prompt — there is
+// no multi-session prompt here, so running them in parallel cannot cause
+// summaries to bleed into one another. (The one prompt that does span sessions
+// is aiFilterSessions, where cross-session reasoning is the point.)
+//
+// The progress callback is invoked under a lock, so it still sees one call at a
+// time and existing callers that mutate shared state from it stay correct
+// without changes. Its first argument becomes a completion count rather than a
+// position — with results landing out of order there is no meaningful index,
+// and a count is what a progress display wants anyway.
+func (g *Generator) GenerateBatch(ctx context.Context, items []BatchItem, cache *Cache, progress func(done, total int, id string, err error)) int {
+	if len(items) == 0 {
+		return 0
+	}
+
+	workers := g.config.Concurrency
+	if workers < 1 {
+		workers = DefaultBatchConcurrency
+	}
+	if workers > len(items) {
+		workers = len(items)
+	}
+
+	var (
+		mu        sync.Mutex
+		succeeded int
+		done      int
+	)
+
+	jobs := make(chan BatchItem)
+	var wg sync.WaitGroup
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for item := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				// Generate outside the lock: it is the slow part and the whole
+				// reason for the pool.
+				summary, err := g.Generate(ctx, item.Text)
+
+				mu.Lock()
+				if err == nil {
+					cache.Put(item.ID, summary, item.LastUsed)
+					succeeded++
+				}
+				done++
+				if progress != nil {
+					progress(done, len(items), item.ID, err)
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+
+dispatch:
+	for _, item := range items {
+		select {
+		case jobs <- item:
+		case <-ctx.Done():
+			// Workers have stopped draining, so sending would block forever.
+			break dispatch
 		}
 	}
+	close(jobs)
+	wg.Wait()
+
 	return succeeded
 }
 
