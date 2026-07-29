@@ -61,6 +61,8 @@ sesh list --since monday -n 20
 sesh show ses_abc       # show details for a session (partial ID works)
 sesh resume ses_abc     # resume a session directly (partial ID works)
 sesh stats              # session statistics across all agents
+sesh setup              # detect an LLM CLI and configure AI features
+sesh setup --verify     # check that the configured commands still work
 sesh index              # generate summaries for all sessions
 sesh index --agent omp  # generate summaries for one agent only
 sesh recap --days 7     # summarize what you worked on this week
@@ -239,6 +241,47 @@ This is the integration point for Raycast extensions or other tools that want to
 
 sesh uses LLMs for title generation, session search, recaps, and natural language queries. Each subcommand can use a different model — fast/cheap for high-volume tasks, heavier for prose generation.
 
+### Automatic setup
+
+```
+sesh setup
+```
+
+Looks for a supported CLI on your PATH, shows you the config it wants to write, and checks that it actually works before finishing. It uses whatever you're already logged into — no API keys to manage.
+
+```
+Found claude on your PATH.
+  (uses your existing Claude Code login; ~5-10s per summary)
+
+Creating ~/.config/sesh/config.json with:
+
+  {
+    "ask":   { "command": ["claude", "-p", "--model", "sonnet", ...] },
+    "index": { "command": ["claude", "-p", "--model", "haiku", ...] }
+  }
+
+Write this config? [y/N] y
+Wrote ~/.config/sesh/config.json
+
+Checking index, ask.filter_command: claude -p --model haiku ...
+  ok
+Checking ask, recap: claude -p --model sonnet ...
+  ok
+
+All 2 command(s) working.
+```
+
+It searches for `llm`, then `claude`, then `codex`, preferring `llm` because it's a single API call rather than a whole agent harness. Existing settings are never overwritten — run it with a partial config and it fills only the gaps.
+
+Run it again any time to check a configuration you already have:
+
+```
+sesh setup --verify   # check the configured commands; never writes
+sesh setup --yes      # skip the confirmation prompt
+```
+
+`--verify` is the thing to reach for when summaries stop appearing. It runs each configured command against a known test transcript and reports which one is broken and why — which catches an expired login or a retired model far faster than reading config.
+
 ### Minimal setup
 
 Configure one command and everything uses it:
@@ -308,8 +351,8 @@ Each LLM call assembles input from three parts: a **system prompt** (role framin
 ```
 
 - `system_prompt` tells the model what role to adopt. The defaults prevent the model from trying to "help with" or "respond to" the session content — a common failure mode when LLMs see conversation transcripts.
-- `prompt` is the task-specific instruction (e.g., "label this session" or "write a recap").
-- If `prompt` contains `{{TRANSCRIPT}}`, the transcript is inserted at that location instead of between the separators. This gives full control over prompt layout.
+- `prompt` is the task-specific instruction (e.g., "label this session" or "write a recap"). Note it comes **after** the data, so a custom prompt referring to the transcript's position should say "above" — models told to read a transcript "below" find the instructions there instead and will sometimes reply that no transcript was provided.
+- If `prompt` contains `{{TRANSCRIPT}}`, the transcript is inserted at that location instead of between the separators. This gives full control over prompt layout, and is how to place the transcript after the instructions if you want that ordering.
 
 Both fields are optional. When omitted, sesh uses built-in defaults with anti-response guardrails.
 
@@ -346,7 +389,18 @@ Shows a progress line per session. Run this once to backfill, then sesh keeps up
 
 Summaries are cached at `~/.cache/sesh/summaries.json`. A cached summary is considered stale when the session's `last_used` timestamp changes and the summary is more than an hour old. This avoids re-summarizing active sessions on every run while keeping finished sessions up to date.
 
-If summary generation fails (expired credentials, command not found, timeout), sesh logs a warning and continues with the raw title. Nothing crashes.
+If summary generation fails (expired credentials, command not found, timeout), sesh continues with the raw title. Nothing crashes.
+
+A single failure is usually transient, so it passes quietly. Repeated total failure is not — it means the configured command is broken and waiting won't fix it — so sesh reports it the next time you open the picker, along with the underlying error:
+
+```
+sesh: summary generation has failed 3 times running.
+sesh:   last error: command failed: exec: "claude": executable file not found in $PATH
+sesh:   command: claude -p --model haiku
+sesh:   run 'sesh setup --verify' to re-check your configuration.
+```
+
+The "run `sesh index`" hint is suppressed while this is showing, and the whole thing clears itself as soon as generation succeeds again.
 
 ## Recap
 

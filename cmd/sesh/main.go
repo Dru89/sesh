@@ -312,6 +312,9 @@ func main() {
 		case "init":
 			runInit(os.Args[2:])
 			return
+		case "setup":
+			runSetup(os.Args[2:])
+			return
 		case "list":
 			runList(os.Args[2:])
 			return
@@ -466,7 +469,7 @@ func main() {
 			if c := health.LastCommand(); len(c) > 0 {
 				fmt.Fprintf(os.Stderr, "sesh:   command: %s\n", strings.Join(c, " "))
 			}
-			fmt.Fprintf(os.Stderr, "sesh:   check the LLM command in ~/.config/sesh/config.json\n")
+			fmt.Fprintf(os.Stderr, "sesh:   run 'sesh setup --verify' to re-check your configuration.\n")
 		} else {
 			// Cache warming hint: many sessions lack summaries but generation
 			// looks healthy, so the user just hasn't run the initial index.
@@ -480,6 +483,9 @@ func main() {
 				fmt.Fprintf(os.Stderr, "sesh: %d sessions without summaries. Run 'sesh index' to generate them.\n", unsummarized)
 			}
 		}
+	} else {
+		// No LLM command configured. If one could be, say so — but sparingly.
+		maybeShowSetupHint(len(all))
 	}
 
 	// Background version check (non-blocking, cached for 24h).
@@ -1874,7 +1880,9 @@ func applySummaries(sessions []provider.Session, cache *summary.Cache) {
 	}
 }
 
-func loadConfig() config {
+// configPaths returns the candidate config locations in precedence order. The
+// first entry doubles as the path to create when no config exists yet.
+func configPaths() []string {
 	home, _ := os.UserHomeDir()
 	paths := []string{
 		filepath.Join(home, ".config", "sesh", "config.json"),
@@ -1888,21 +1896,37 @@ func loadConfig() config {
 			paths = append(paths, filepath.Join(appdata, "sesh", "config.json"))
 		}
 	}
+	return paths
+}
+
+func loadConfig() config {
+	cfg, _, _ := loadConfigWithPath()
+	return cfg
+}
+
+// loadConfigWithPath loads the config and reports which file it came from.
+//
+// The path matters to `sesh setup`, which edits the config in place: writing to
+// a hardcoded ~/.config/sesh/config.json would silently strand a user whose
+// real config lives under XDG_CONFIG_HOME or %APPDATA%. When no config exists,
+// found is false and path is where one should be created.
+func loadConfigWithPath() (cfg config, path string, found bool) {
+	paths := configPaths()
 
 	for _, p := range paths {
 		data, err := os.ReadFile(p)
 		if err != nil {
 			continue
 		}
-		var cfg config
-		if err := json.Unmarshal(data, &cfg); err != nil {
+		var c config
+		if err := json.Unmarshal(data, &c); err != nil {
 			fmt.Fprintf(os.Stderr, "sesh: warning: invalid config %s: %v\n", p, err)
 			continue
 		}
-		return cfg
+		return c, p, true
 	}
 
-	return config{}
+	return config{}, paths[0], false
 }
 
 func buildProviders(cfg config) []provider.Provider {

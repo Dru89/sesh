@@ -190,3 +190,20 @@ func newTestCache(t *testing.T) *Cache {
 		entries: make(map[string]Entry),
 	}
 }
+
+// TestCacheDirHonorsXDGUnconditionally guards a Windows-specific regression:
+// the %LOCALAPPDATA% fallback used to run after XDG_CACHE_HOME was applied and
+// override it whenever the directory did not exist yet. That made an explicit
+// setting depend on whether a directory happened to have been created, and
+// silently relocated the cache the first time it was.
+func TestCacheDirHonorsXDGUnconditionally(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", dir)
+	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "should-not-be-used"))
+
+	// Deliberately do not create the sesh subdirectory.
+	want := filepath.Join(dir, "sesh")
+	if got := CacheDir(); got != want {
+		t.Errorf("CacheDir() = %q, want %q", got, want)
+	}
+}

@@ -25,14 +25,23 @@ type Cache struct {
 	entries map[string]Entry // keyed by session ID
 }
 
-// cacheDir returns the directory sesh stores its cache files in. Shared by the
+// CacheDir returns the directory sesh stores its cache files in. Shared by the
 // summary cache and the index health record so they always live side by side.
-func cacheDir() string {
+//
+// XDG_CACHE_HOME is honored first and unconditionally. It used to be applied
+// before the Windows fallback below, which then overrode it whenever the
+// directory did not happen to exist yet — so a Windows user who set the
+// variable got %LOCALAPPDATA% anyway, and their cache silently relocated the
+// moment the directory was created. An explicit setting should beat a
+// heuristic, and it should not depend on whether a directory exists.
+func CacheDir() string {
+	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
+		return filepath.Join(xdg, "sesh")
+	}
+
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(home, ".cache", "sesh")
-	if xdg := os.Getenv("XDG_CACHE_HOME"); xdg != "" {
-		dir = filepath.Join(xdg, "sesh")
-	}
+
 	// On Windows, prefer %LOCALAPPDATA%\sesh if ~/.cache doesn't exist.
 	if runtime.GOOS == "windows" {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
@@ -47,7 +56,7 @@ func cacheDir() string {
 // NewCache loads or creates the summary cache.
 func NewCache() *Cache {
 	c := &Cache{
-		path:    filepath.Join(cacheDir(), "summaries.json"),
+		path:    filepath.Join(CacheDir(), "summaries.json"),
 		entries: make(map[string]Entry),
 	}
 	c.load()

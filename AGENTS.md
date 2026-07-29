@@ -274,6 +274,8 @@ Releases use a PR-based flow. Creating a `release/vX.Y.Z` branch and opening a P
 sesh/
 ├── cmd/sesh/main.go         # CLI entry point, all subcommands, config, provider wiring
 ├── cmd/sesh/main_test.go    # Tests: config resolution, findSession, computeStats, parseDateish, init, aiFilterSessions
+├── cmd/sesh/setup.go        # sesh setup: CLI detection, config merge-write, canary verification, first-run hint
+├── cmd/sesh/setup_test.go   # Tests: detection order, gap-filling, unknown-key preservation, canary, hint cap
 ├── provider/
 │   ├── provider.go           # Session type, Provider interface, helpers (Q, CdAndRun, RelativeTime)
 │   ├── provider_test.go      # Tests: ShellQuote, ShellQuotePowerShell, CdAndRun, RelativeTime, DisplayTitle
@@ -493,9 +495,29 @@ Time parsing (`parseDateish`) supports: ISO dates (`2026-04-01`), relative days 
 
 Uses `summary.RunLLM()` with a 60-second timeout (longer than the 30-second per-summary timeout since the recap prompt is larger).
 
+### Setup subcommand
+
+`sesh setup` detects an available LLM CLI, writes a config, and verifies it works. `cmd/sesh/setup.go`.
+
+**Detection** (`candidates`, `detectCandidate`) probes PATH via an indirected `lookPath` — a package var so tests control what appears installed without depending on PATHEXT/executable-bit differences across platforms. Order is `llm`, `claude`, `codex`: `llm` first because it is one API call rather than a whole agent harness. PATH presence is the signal, not session mix — OpenCode is model-agnostic, so a session list dominated by it says nothing about which credential exists.
+
+Commands use **model aliases** (`haiku`, `sonnet`) rather than pinned IDs. An alias floats in version but holds in cost tier, which is the dimension that matters when any model can write a fifteen-word title. A pinned ID is stable today and on a deprecation clock.
+
+The `claude` candidate carries **`--setting-sources ""`**, and it is load-bearing. Without it `claude -p` loads project settings and CLAUDE.md from the working directory and summarizes *those* instead of stdin — measured at 1/5 success from inside a project versus 3/3 with it, and sesh is essentially always run from a project directory. The failure is silent: exit 0, fluent English, wrong subject. `--no-session-persistence` keeps summarization from writing its own session transcripts; `--strict-mcp-config` skips MCP startup a one-shot summary has no use for.
+
+**Verification** (`verifyCommand`, `summarizesCanary`) runs the command against a canary transcript through `summary.Generator`, so it exercises the real prompt assembly, excerpting, and 30-second timeout. `exec.LookPath` proves a binary exists, not that it works — an expired login, a retired model, and the context leak above all produce non-empty output. The check matches **several** anchors (`quokka`, `cache.go`, `call site`) rather than one token, because summarizers legitimately paraphrase: one model returned "Renaming a helper function in cache.go and updating its call sites", dropping the proper noun and failing a single-token check on a working config.
+
+**Writing** (`writeConfigKeys`) merges top-level keys through `map[string]json.RawMessage` rather than round-tripping the typed `config` struct. Neither `config` nor `providerConfig` has a catch-all, so unmarshal-then-marshal silently drops unknown fields — a key from a newer sesh, or one the user hand-wrote. Backs up to `config.json.bak`, writes atomically via tmp+rename, and refuses to touch an unparseable config. Key order is normalized (encoding/json sorts map keys); content is preserved, layout is not.
+
+Setup only ever **adds absent keys** and never modifies an existing one, so the list of keys being added is the complete diff — which is why it prints that list instead of a real diff. Two keys cover all four resolution chains: `index` serves title generation and the ask filter pass, `ask` serves prose generation and is inherited by recap.
+
+`loadConfigWithPath()` reports which of the candidate paths the config came from, so setup edits the file the user actually has rather than assuming `~/.config/sesh/config.json`.
+
 ### Cache warming and failure reporting
 
-The main picker writes one of two stderr hints, both gated on an LLM command being configured. They are mutually exclusive, and which one fires depends on `summary.Health`:
+The main picker writes at most one stderr hint. When **no** LLM command is configured, `maybeShowSetupHint` suggests `sesh setup` — but only if something was detected to configure and the user has enough sessions (`setupHintMinSessions`, matching the cache-warming threshold) for titles to matter. It shows at most `setupHintLimit` (3) times, tracked in `~/.cache/sesh/setup-hint.json`, then stops for good; running `sesh setup` at all suppresses it permanently, including when the user declines the write. There is deliberately no time-based re-prompt — a decayed nag is still a nag for a one-time onboarding nudge. The hint is picker-only: `sesh list`, `--json`, and `--ai-search` back other tools where it would just be chatter.
+
+When an LLM command **is** configured, one of two other hints fires. They are mutually exclusive, and which one depends on `summary.Health`:
 
 - **Generation is healthy** and >20 sessions lack summaries: `sesh: N sessions without summaries. Run 'sesh index' to generate them.` The user has set up an LLM command but hasn't run the initial index yet.
 - **Generation is failing** (`Health.Failing()`, i.e. 3+ consecutive runs where every summary failed): the failure hint, carrying the condensed error and the command that produced it.
