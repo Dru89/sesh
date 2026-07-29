@@ -174,6 +174,42 @@ func TestDisplayTitle(t *testing.T) {
 			Session{Summary: "Refactored\nthe parser", Title: "raw", ID: "ses_123"},
 			"Refactored the parser",
 		},
+		{
+			// A real name — app-generated or user-typed — beats a summary we
+			// invented, even when a stale summary is still cached for the ID.
+			"curated title beats summary",
+			Session{
+				Summary:      "Built auth middleware",
+				Title:        "gdocs-sync empty results bug",
+				CuratedTitle: true,
+				Slug:         "eager-moon",
+				ID:           "ses_123",
+			},
+			"gdocs-sync empty results bug",
+		},
+		{
+			// A rename in the desktop app changes Title, which is re-read from
+			// provider metadata every run. Nothing else has to invalidate.
+			"renamed curated title wins over an older summary",
+			Session{
+				Summary:      "Fix session token nil check",
+				Title:        "Auth rewrite — round 2",
+				CuratedTitle: true,
+				ID:           "ses_123",
+			},
+			"Auth rewrite — round 2",
+		},
+		{
+			// Defensive: the flag without a title must not blank the display.
+			"curated flag with empty title falls through to summary",
+			Session{Summary: "Built auth middleware", CuratedTitle: true, ID: "ses_123"},
+			"Built auth middleware",
+		},
+		{
+			"curated title flattened to one line",
+			Session{Title: "Auth\nrewrite", CuratedTitle: true, ID: "ses_123"},
+			"Auth rewrite",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

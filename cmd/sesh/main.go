@@ -1851,8 +1851,19 @@ func dedupeSessions(all []provider.Session) []provider.Session {
 }
 
 // applySummaries enriches sessions with cached summaries.
+//
+// Sessions with a curated title are skipped even when the cache holds an entry
+// for them. Generation already skips these, but a cache entry can predate the
+// CuratedTitle flag, or belong to the same session ID under a different
+// provider — a desktop session resumed from the terminal is summarized as
+// claude-code, then dedupeSessions keeps the claude-code-desktop entry, and the
+// summary would land on it by ID. Attaching it would override a real name and
+// also pollute SearchText with a description that may no longer be accurate.
 func applySummaries(sessions []provider.Session, cache *summary.Cache) {
 	for i := range sessions {
+		if sessions[i].CuratedTitle {
+			continue
+		}
 		if s, ok := cache.Get(sessions[i].ID, sessions[i].LastUsed); ok {
 			sessions[i].Summary = summary.StripMarkdown(s)
 			// Also add summary to search text for fuzzy matching.
