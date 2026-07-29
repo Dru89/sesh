@@ -285,8 +285,11 @@ sesh/
 │   ├── claude_desktop.go        # Claude Code Desktop adapter — reads desktop app session metadata + shared ~/.claude transcripts
 │   ├── claude_cowork.go         # Claude Cowork adapter — reads Cowork session metadata + transcripts (desktop app userData dir)
 │   └── external.go           # External provider — shells out to user-defined command, parses JSON
+├── internal/paths/
+│   ├── paths.go              # Shared cache-directory resolution — every caller must agree
+│   └── paths_test.go         # Tests: XDG precedence, stability across directory creation
 ├── summary/
-│   ├── cache.go              # JSON file cache at ~/.cache/sesh/summaries.json, shared cacheDir()
+│   ├── cache.go              # JSON file cache at ~/.cache/sesh/summaries.json; CacheDir() delegates to internal/paths
 │   ├── cache_test.go         # Tests: Get/Put, staleness, NeedsSummary, Save/load
 │   ├── health.go             # Generation health record at ~/.cache/sesh/index-health.json
 │   ├── health_test.go        # Tests: RecordRun increment/reset, threshold, roundtrip, CondenseError
@@ -411,6 +414,7 @@ Any executable that outputs `[{"id", "title", "created", "last_used", ...}]` to 
 
 - **TUI renders to stderr.** The binary's stdout is reserved for the shell command output. Uses `tea.WithOutput(os.Stderr)` and `tea.WithAltScreen()`.
 - **Fuzzy search via sahilm/fuzzy.** Each session has a `SearchText` field (not exported to JSON) concatenating title, slug, directory, first user prompts, and cached summary.
+- **One cache directory, resolved in one place.** `internal/paths.Cache()` is the only implementation; `summary.CacheDir()` and `update.cachePath()` both delegate. This is not just tidiness — the Windows branch probes the filesystem (`%LOCALAPPDATA%\sesh` when `~/.cache` is absent), so two independent implementations could disagree, and one of them calling `MkdirAll` changed the answer the other got on the next run. That is exactly what happened: the update checker created `~/.cache/sesh`, which flipped `summary.CacheDir()` from `%LOCALAPPDATA%` to `~/.cache` and silently orphaned every cached summary. Any new cache file goes through this helper.
 - **Pure Go SQLite.** Uses `modernc.org/sqlite` to avoid CGO. Opens the database read-only with WAL mode.
 - **Shell quoting.** `provider.ShellQuote()` handles paths with spaces and special characters (single-quote wrapping with escaped internal quotes).
 - **Provider options pattern.** Built-in providers accept functional options (e.g., `WithOpenCodeResumeCommand()`) so config overrides are injected at construction time without the provider needing to know about the config system.

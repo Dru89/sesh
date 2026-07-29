@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fix the summary cache silently disappearing on Windows. The update checker computed its own cache path and created `~/.cache/sesh`, which flipped where sesh looked for summaries — written to `%LOCALAPPDATA%\sesh` on one run, read from `~/.cache\sesh` on the next, so every title reverted to the raw first prompt and needed regenerating. All cache paths now resolve through one shared helper. Windows users may see one final re-index as the location settles
+
 - Add `sesh setup` — detects an LLM CLI on your PATH (`llm`, `claude`, or `codex`), shows the config it wants to write, and verifies the result actually works before finishing. Uses whatever you're already logged into, so there are no API keys to manage. Existing settings are never overwritten; run it with a partial config and it fills only the gaps
 - Add `sesh setup --verify`, which checks a configuration you already have without writing anything. Reach for it when summaries stop appearing — it runs each configured command against a known transcript and reports which one is broken and why
 - Suggest `sesh setup` from the picker when AI features aren't configured but a supported CLI is installed. Shown at most three times, and never again once you've run setup
