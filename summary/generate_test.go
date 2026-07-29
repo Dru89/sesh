@@ -2,8 +2,10 @@ package summary
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -320,5 +322,172 @@ func TestStripMarkdown(t *testing.T) {
 				t.Errorf("StripMarkdown(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestGenerateBatchProcessesEveryItem verifies the worker pool doesn't drop or
+// duplicate work — every item is summarized exactly once regardless of how the
+// jobs are distributed.
+func TestGenerateBatchProcessesEveryItem(t *testing.T) {
+	cmd := testhelper.WriteMockScript(t,
+		"#!/bin/sh\ncat >/dev/null\necho summary\n",
+		"$null = [Console]::In.ReadToEnd()\nWrite-Output 'summary'\n",
+	)
+	gen := NewGenerator(Config{Command: cmd, Concurrency: 4})
+	cache := newTestCache(t)
+
+	items := make([]BatchItem, 12)
+	for i := range items {
+		items[i] = BatchItem{ID: fmt.Sprintf("s%d", i), Text: "some session text", LastUsed: time.Now()}
+	}
+
+	var (
+		mu   sync.Mutex
+		seen = map[string]int{}
+	)
+	succeeded := gen.GenerateBatch(context.Background(), items, cache, func(done, total int, id string, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		seen[id]++
+	})
+
+	if succeeded != len(items) {
+		t.Errorf("succeeded = %d, want %d", succeeded, len(items))
+	}
+	if len(seen) != len(items) {
+		t.Errorf("reported on %d distinct items, want %d", len(seen), len(items))
+	}
+	for id, n := range seen {
+		if n != 1 {
+			t.Errorf("item %s reported %d times, want 1", id, n)
+		}
+	}
+	if cache.Len() != len(items) {
+		t.Errorf("cached %d summaries, want %d", cache.Len(), len(items))
+	}
+}
+
+// TestGenerateBatchSerializesProgressCallback pins the contract existing callers
+// rely on: runIndex mutates an error-count map from the callback and
+// RunRecorder mutates two flags, neither with a lock. Run under -race, an
+// unsynchronized callback fails here.
+func TestGenerateBatchSerializesProgressCallback(t *testing.T) {
+	cmd := testhelper.WriteMockScript(t,
+		"#!/bin/sh\ncat >/dev/null\necho summary\n",
+		"$null = [Console]::In.ReadToEnd()\nWrite-Output 'summary'\n",
+	)
+	gen := NewGenerator(Config{Command: cmd, Concurrency: 4})
+	cache := newTestCache(t)
+
+	items := make([]BatchItem, 12)
+	for i := range items {
+		items[i] = BatchItem{ID: fmt.Sprintf("s%d", i), Text: "text", LastUsed: time.Now()}
+	}
+
+	// Deliberately unsynchronized, exactly like the real callers.
+	counts := map[string]int{}
+	calls := 0
+	gen.GenerateBatch(context.Background(), items, cache, func(done, total int, id string, err error) {
+		counts["seen"]++
+		calls++
+		if done != calls {
+			t.Errorf("done = %d on call %d, want a monotonic completion count", done, calls)
+		}
+		if total != len(items) {
+			t.Errorf("total = %d, want %d", total, len(items))
+		}
+	})
+
+	if counts["seen"] != len(items) {
+		t.Errorf("callback ran %d times, want %d", counts["seen"], len(items))
+	}
+}
+
+// TestGenerateBatchRunsInParallel is the point of the change. Serial execution
+// of 6 items sleeping 0.4s each takes >=2.4s; three workers should finish in
+// roughly a third of that. The threshold is loose so process-spawn overhead on
+// a slow runner can't make it flaky.
+func TestGenerateBatchRunsInParallel(t *testing.T) {
+	cmd := testhelper.WriteMockScript(t,
+		"#!/bin/sh\ncat >/dev/null\nsleep 0.4\necho summary\n",
+		"$null = [Console]::In.ReadToEnd()\nStart-Sleep -Milliseconds 400\nWrite-Output 'summary'\n",
+	)
+	gen := NewGenerator(Config{Command: cmd, Concurrency: 3})
+	cache := newTestCache(t)
+
+	items := make([]BatchItem, 6)
+	for i := range items {
+		items[i] = BatchItem{ID: fmt.Sprintf("s%d", i), Text: "text", LastUsed: time.Now()}
+	}
+
+	start := time.Now()
+	succeeded := gen.GenerateBatch(context.Background(), items, cache, nil)
+	elapsed := time.Since(start)
+
+	if succeeded != len(items) {
+		t.Fatalf("succeeded = %d, want %d", succeeded, len(items))
+	}
+	const serial = 6 * 400 * time.Millisecond
+	if elapsed >= serial {
+		t.Errorf("took %v, which is no better than serial (%v)", elapsed, serial)
+	}
+}
+
+func TestGenerateBatchEmpty(t *testing.T) {
+	gen := NewGenerator(Config{Command: []string{"false"}})
+	if got := gen.GenerateBatch(context.Background(), nil, newTestCache(t), nil); got != 0 {
+		t.Errorf("succeeded = %d, want 0 for an empty batch", got)
+	}
+}
+
+// TestGenerateBatchStopsOnCancelledContext guards the dispatch loop: workers
+// stop draining once the context is done, so a naive send would block forever.
+func TestGenerateBatchStopsOnCancelledContext(t *testing.T) {
+	cmd := testhelper.WriteMockScript(t,
+		"#!/bin/sh\ncat >/dev/null\necho summary\n",
+		"$null = [Console]::In.ReadToEnd()\nWrite-Output 'summary'\n",
+	)
+	gen := NewGenerator(Config{Command: cmd, Concurrency: 2})
+
+	items := make([]BatchItem, 50)
+	for i := range items {
+		items[i] = BatchItem{ID: fmt.Sprintf("s%d", i), Text: "text", LastUsed: time.Now()}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan int, 1)
+	go func() { done <- gen.GenerateBatch(ctx, items, newTestCache(t), nil) }()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("GenerateBatch did not return on a cancelled context")
+	}
+}
+
+func TestGenerateBatchDefaultsConcurrency(t *testing.T) {
+	// A zero or negative value must fall back rather than deadlock on zero
+	// workers with a blocking dispatch.
+	cmd := testhelper.WriteMockScript(t,
+		"#!/bin/sh\ncat >/dev/null\necho summary\n",
+		"$null = [Console]::In.ReadToEnd()\nWrite-Output 'summary'\n",
+	)
+	for _, n := range []int{0, -1} {
+		gen := NewGenerator(Config{Command: cmd, Concurrency: n})
+		items := []BatchItem{{ID: "a", Text: "t", LastUsed: time.Now()}}
+
+		done := make(chan int, 1)
+		go func() { done <- gen.GenerateBatch(context.Background(), items, newTestCache(t), nil) }()
+
+		select {
+		case got := <-done:
+			if got != 1 {
+				t.Errorf("concurrency %d: succeeded = %d, want 1", n, got)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("concurrency %d: deadlocked", n)
+		}
 	}
 }

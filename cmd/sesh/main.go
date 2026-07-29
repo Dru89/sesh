@@ -74,6 +74,10 @@ type commandConfig struct {
 	SystemPrompt string            `json:"system_prompt,omitempty"` // role-framing context prepended before the prompt
 	Prompt       string            `json:"prompt,omitempty"`
 	Env          map[string]string `json:"env,omitempty"` // per-command env overrides top-level
+
+	// Concurrency caps how many summaries are generated in parallel.
+	// Only meaningful on `index`, the one batch path. Zero means the default.
+	Concurrency int `json:"concurrency,omitempty"`
 }
 
 // askConfig extends commandConfig with a separate filter command.
@@ -228,6 +232,10 @@ func (c config) summaryConfig() summary.Config {
 		SystemPrompt: c.indexSystemPrompt(),
 		Prompt:       c.indexPrompt(),
 		Env:          c.buildEnv(env),
+		// Read from `index` only, not through the fallback chain: this governs
+		// how batch generation is run, not which command runs, so inheriting it
+		// from whichever command happened to resolve would be surprising.
+		Concurrency: c.Index.Concurrency,
 	}
 }
 

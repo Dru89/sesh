@@ -99,6 +99,12 @@
         "env": {
           "$ref": "#/$defs/env",
           "description": "Environment variables for this command. Overrides top-level env."
+        },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many summaries to generate in parallel during batch indexing. Only meaningful on \"index\", the one batch path. Defaults to 4. Lower it if the command shares a rate limit that parallel calls exhaust.",
+          "examples": [2, 4, 8]
         }
       }
     },

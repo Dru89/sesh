@@ -385,6 +385,23 @@ Shows a progress line per session. Run this once to backfill, then sesh keeps up
 
 **Lazy background generation:** During normal `sesh` usage, up to 10 unsummarized sessions are processed in the background while the picker is open. Summaries won't appear in the current invocation but will be there next time.
 
+### Concurrency
+
+Summaries are generated 4 at a time. This matters most for agent CLIs: `llm` answers in well under a second, while `claude -p` boots a whole harness per call and takes 5-10 seconds, which is the difference between a few minutes and half an hour on a large backlog.
+
+Lower it if your command shares a rate limit that parallel calls exhaust:
+
+```json
+{
+  "index": {
+    "command": ["claude", "-p", "--model", "haiku"],
+    "concurrency": 2
+  }
+}
+```
+
+It only applies to `index`, the one batch path.
+
 ### Cache
 
 Summaries are cached at `~/.cache/sesh/summaries.json`. A cached summary is considered stale when the session's `last_used` timestamp changes and the summary is more than an hour old. This avoids re-summarizing active sessions on every run while keeping finished sessions up to date.

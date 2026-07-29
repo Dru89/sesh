@@ -2,16 +2,13 @@
 
 ## [Unreleased]
 
+- Generate summaries 4 at a time instead of one after another. Barely noticeable with a fast API-backed command, but an agent CLI takes 5-10 seconds per call, which was the difference between minutes and half an hour when indexing a large backlog. Tune with `index.concurrency` if your command shares a rate limit that parallel calls exhaust
 - Fix the summary cache silently disappearing on Windows. The update checker computed its own cache path and created `~/.cache/sesh`, which flipped where sesh looked for summaries — written to `%LOCALAPPDATA%\sesh` on one run, read from `~/.cache\sesh` on the next, so every title reverted to the raw first prompt and needed regenerating. All cache paths now resolve through one shared helper. Windows users may see one final re-index as the location settles
-
 - Add `sesh setup` — detects an LLM CLI on your PATH (`llm`, `claude`, or `codex`), shows the config it wants to write, and verifies the result actually works before finishing. Uses whatever you're already logged into, so there are no API keys to manage. Existing settings are never overwritten; run it with a partial config and it fills only the gaps
 - Add `sesh setup --verify`, which checks a configuration you already have without writing anything. Reach for it when summaries stop appearing — it runs each configured command against a known transcript and reports which one is broken and why
 - Suggest `sesh setup` from the picker when AI features aren't configured but a supported CLI is installed. Shown at most three times, and never again once you've run setup
-
 - Fix the summarizer being told to read the transcript in the wrong place. The `index`, `ask`, and `recap` task prompts all said the session data was "below" them, but it is placed above — so the model would sometimes look, find only instructions, and answer that no transcript was provided. Affected every configured LLM command, not just one
-
 - Stop generated summaries from overriding real session names. Claude Code Desktop and Cowork sessions carry a name the app generated or the user typed, and a cached summary silently displaced it — summarization skipped these sessions, but nothing stopped an already-cached summary from being shown over the title. This also means renaming a session in the desktop app now shows up in sesh on the next run
-
 - Report persistent summary-generation failures instead of swallowing them. Background indexing runs under the TUI and previously discarded every error, so a broken LLM command (retired model ID, expired credentials, renamed binary) left the picker silently never improving — indistinguishable from having no LLM configured at all. Repeated total failures are now recorded and surfaced on a later run, along with the underlying error and the command that produced it
 - Suppress the "run `sesh index`" hint while generation is failing, so the suggested next step isn't the thing that's broken
 - Collapse repeated identical errors in `sesh index` output — a broken command fails the same way for every session, and printing it hundreds of times buried the one line that mattered

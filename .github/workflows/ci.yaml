@@ -21,8 +21,16 @@ jobs:
         with:
           go-version: "1.25"
 
+      # -race on Linux only: the detector needs a C toolchain, which the
+      # Windows runner does not reliably provide. Summary generation runs a
+      # worker pool, so a data race there would otherwise go unnoticed.
       - name: Run tests
         run: go test ./... -v
+        if: matrix.os == 'windows-latest'
+
+      - name: Run tests (race detector)
+        run: go test ./... -v -race
+        if: matrix.os == 'ubuntu-latest'
 
       - name: Build
         run: go build ./cmd/sesh/
