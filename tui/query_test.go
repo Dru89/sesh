@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/dru89/sesh/provider"
@@ -395,16 +396,45 @@ func TestResolveDir(t *testing.T) {
 }
 
 func TestGitRoot(t *testing.T) {
-	// This test runs inside the sesh repo, so GitRoot should succeed
-	// and return an absolute path ending in "sesh".
+	// This test runs inside the sesh repo, so GitRoot should succeed. Don't
+	// assert on the directory's name: in a worktree the checkout is named
+	// after the branch, not the repo. Assert what GitRoot actually promises —
+	// an absolute path to a checkout root containing the current directory.
 	root, err := GitRoot()
 	if err != nil {
 		t.Skipf("not in a git repo: %v", err)
 	}
 	if !filepath.IsAbs(root) {
-		t.Errorf("expected absolute path, got %q", root)
+		t.Fatalf("expected absolute path, got %q", root)
 	}
-	if filepath.Base(root) != "sesh" {
-		t.Errorf("expected repo root to end in 'sesh', got %q", root)
+
+	// Every checkout root has a .git entry: a directory in a standard clone,
+	// a file pointing at the common dir in a worktree.
+	if _, err := os.Stat(filepath.Join(root, ".git")); err != nil {
+		t.Errorf("expected a .git entry at %q: %v", root, err)
 	}
+
+	// The test binary runs in tui/, which must live under the root.
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, err := filepath.Rel(resolve(t, root), resolve(t, wd))
+	if err != nil {
+		t.Fatalf("relating %q to %q: %v", wd, root, err)
+	}
+	if rel != "." && (rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+		t.Errorf("expected working directory %q to be inside repo root %q", wd, root)
+	}
+}
+
+// resolve expands symlinks so paths from different sources compare cleanly —
+// on macOS, /var and /private/var name the same directory.
+func resolve(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return path
+	}
+	return resolved
 }
